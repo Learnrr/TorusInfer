@@ -4,6 +4,8 @@
 #include "MLP.h"
 #include "ModelWeights.h"
 #include "Workspace.h"
+#include "Layer.h"
+#include "ForwardContext.h"
 
 class TransformerLayer: public Layer {
     public:
@@ -17,19 +19,9 @@ class TransformerLayer: public Layer {
             this->layer_layout = layer_layout;
         }
 
-        void prefill_forward(const Tensor& input, Tensor& output, Workspace& workspace) override {
-            // Implement the logic for the prefill forward pass of the transformer layer
-            Tensor attn_output(input.size, input.data, input.shape, input.dtype);
-            attention->prefill_forward(input, attn_output, workspace);
-            mlp->prefill_forward(attn_output, output);
-        }
+        void prefill_forward(const Tensor& input, Tensor& output, ForwardContext& context) override;
 
-        void decode_forward(const Tensor& input, Tensor& output, Workspace& workspace) override {
-            // Implement the logic for the decode forward pass of the transformer layer
-            Tensor attn_output(input.size, input.data, input.shape, input.dtype);
-            attention->decode_forward(input, attn_output);
-            mlp->decode_forward(attn_output, output);
-        }
+        void decode_forward(const Tensor& input, Tensor& output, ForwardContext& context) override;
 
     private:
         std::unique_ptr<Attention> attention;

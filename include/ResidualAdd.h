@@ -1,9 +1,10 @@
 
 #include "Tensor.h"
-class ResidualAdd {
+#include "Layer.h"
+class ResidualAdd: public Layer {
     public:
         ResidualAdd(int hidden_size);
-        void forward(Tensor& input, Tensor& output);
+        void forward(Tensor& input, Tensor& output, ForwardContext& context) override;
     private:
 
 };

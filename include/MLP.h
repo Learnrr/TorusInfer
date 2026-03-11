@@ -5,23 +5,15 @@
 #include "Multiply.h"
 #include "Layer.h"
 #include "ModelWeights.h"
+#include "ForwardContext.h"
 class MLP: public Layer {
     public:
         MLP(int hidden_size, int intermediate_size, LayerWeightLayout* layer_layout): layer_layout(layer_layout){
-            linear1 = make_unique<Linear>(hidden_size, intermediate_size);
-            linear2 = make_unique<Linear>(intermediate_size, hidden_size);
-            swiglu = make_unique<SwiGLU>(intermediate_size);
+            linear1 = std::make_unique<Linear>(hidden_size, intermediate_size);
+            linear2 = std::make_unique<Linear>(intermediate_size, hidden_size);
+            swiglu = std::make_unique<SwiGLU>(intermediate_size);
         }
-        void forward(void* input, void* output) override {
-
-            Tensor intermediate_output(intermediate_size, {input.shape[0], intermediate_size}, input.dtype);
-
-            linear1->forward(input, intermediate_output);
-            linear2->forward(intermediate_output, output);
-            swiglu->forward(intermediate_output.data, intermediate_output.data);
-            
-
-        }
+        void forward(Tensor& input, Tensor& output, ForwardContext& context) override;
     private:
 
         std::unique_ptr<Linear> linear1;

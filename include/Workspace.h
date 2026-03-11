@@ -75,12 +75,20 @@ class Workspace {
         void* get_qkv_workspace() {
             return (void*)((char*)workspace + layout.layer_workspace.qkv_offset);
         }
-
+        void* get_hidden2_workspace() {
+            return (void*)((char*)workspace + layout.hidden2_offset);
+        }
         void* get_logits_workspace() {
             return (void*)((char*)workspace + layout.logits_offset);
         }
-        TransformerLayerWorkspace get_transformer_layer_workspace() {
-            return layout.layer_workspace;
+        void* get_attn_score_workspace() {
+            return (void*)((char*)workspace + layout.layer_workspace.qkv_offset);
+        }
+        void* get_attn_context_workspace() {
+            return (void*)((char*)workspace + layout.layer_workspace.context_offset);
+        }
+        void* get_attn_output_workspace() {
+            return (void*)((char*)workspace + layout.layer_workspace.attn_out_offset);
         }
         WorkspaceLayout get_layout() {
             return layout;
