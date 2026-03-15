@@ -1,6 +1,7 @@
 #include "Scheduler.h"
 #include "utils/include/logger.h"
 
+
 void Scheduler::schedule() {
     
     while(True){
@@ -11,6 +12,7 @@ void Scheduler::schedule() {
             Batch decode_batch = buildDecodeBatch();
             
             model.decode_forward(decode_batch);
+            appendDecodedTokens(decode_batch);
 
         }
         
@@ -24,6 +26,21 @@ void Scheduler::schedule() {
 
         handleFinishedSequence();
         returnSequenceOutput();
+    }
+}
+
+void appendDecodedTokens(Batch& decode_batch) {
+    if (decode_batch.sampled_token_ids.size() != decode_batch.sequences.size()) {
+        // Model has not attached one next-token per sequence yet.
+        return;
+    }
+
+    for (size_t i = 0; i < decode_batch.sequences.size(); ++i) {
+        auto& seq = decode_batch.sequences[i];
+        if (!seq) {
+            continue;
+        }
+        seq->add_token(decode_batch.sampled_token_ids[i]);
     }
 }
 
@@ -48,14 +65,15 @@ variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
     
     for(auto& seq : decoding_queue){
         if(seq->SequenceState!= SequenceState::FINISHED){
-            batch.token_ids.insert(batch.token_ids.end(), seq->token_ids.begin(), seq->token_ids.end());
-
-            size_t seq_len = seq->token_ids.size();
-            for(size_t i = 0; i < seq_len; ++i){
-                batch.token_positions.push_back(i);
-                batch.sequences.push_back(seq);
+            if(seq->token_ids.empty()){
+                continue;
             }
-            batch.num_tokens += seq->token_ids.size();
+
+            size_t last_pos = seq->token_ids.size() - 1;
+            batch.token_ids.push_back(seq->token_ids[last_pos]);
+            batch.token_positions.push_back(last_pos);
+            batch.sequences.push_back(seq);
+            batch.num_tokens += 1;
             batch.batch_size++;
 
             if(seq->sequence_len % BLOCK_SIZE == 0){
@@ -73,27 +91,28 @@ variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
         }
     }
     while(batch.batch_size < MAX_DECODE_BATCH_SIZE && !prefilling_queue.empty()){
-        Sequence seq = prefilling_queue.front();
-        if(seq.SequenceState == SequenceState::PREFILLED){
+        auto seq = prefilling_queue.front();
+        if(seq->SequenceState == SequenceState::PREFILLED){
             prefilling_queue.erase(prefilling_queue.begin());
-            seq.SequenceState = SequenceState::DECODING;
+            seq->SequenceState = SequenceState::DECODING;
             decoding_queue.push_back(seq);
-            LOG_DEBUG("Sequence " + std::to_string(seq.seq_id) + " moved from PREFILLED to DECODING state.");
+            LOG_DEBUG("Sequence " + std::to_string(seq->seq_id) + " moved from PREFILLED to DECODING state.");
 
-            batch.token_ids.insert(batch.token_ids.end(), seq.token_ids.begin(), seq.token_ids.end());
-
-            size_t seq_len = seq.token_ids.size();
-            for(size_t i = 0; i < seq_len; ++i){
-                batch.token_positions.push_back(i);
-                batch.sequences.push_back(&seq);
+            if(seq->token_ids.empty()){
+                continue;
             }
-            batch.num_tokens += seq.token_ids.size();
+
+            size_t last_pos = seq->token_ids.size() - 1;
+            batch.token_ids.push_back(seq->token_ids[last_pos]);
+            batch.token_positions.push_back(last_pos);
+            batch.sequences.push_back(seq);
+            batch.num_tokens += 1;
             batch.batch_size++;
 
-            if(seq.sequence_len % BLOCK_SIZE == 0){
+            if(seq->seq_len % BLOCK_SIZE == 0){
                 variant<CacheBlock*, ErrorCode> result = cache_manager->allocate_cache_block();
                 if(std::holds_alternative<CacheBlock*>(result)){
-                    seq.blocks.push_back(std::get<CacheBlock*>(result));
+                    seq->blocks.push_back(std::get<CacheBlock*>(result));
                 } else {
                     return ErrorCode::MEMORY_FAILURE;
                 }
@@ -146,6 +165,9 @@ variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
 ErrorCode Scheduler::addSequence(size_t seq_id, vector<size_t> token_ids) {
     auto new_seq = std::make_shared<Sequence>(seq_id);
     new_seq->token_ids = token_ids;
+    new_seq->seq_len = token_ids.size();
+    new_seq->SequenceState = SequenceState::WAITING;
+    new_seq->blocks.clear();
     waiting_queue.push_back(new_seq);
     LOG_DEBUG("Sequence added to waiting queue: " + std::to_string(new_seq->seq_id));
     return ErrorCode::SUCCESS;

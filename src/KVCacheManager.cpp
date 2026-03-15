@@ -16,7 +16,7 @@ ErrorCode KVCacheManager::init(){
         return ErrorCode::CUDA_FAILURE;
     }
     for (size_t i = 0; i < num_blocks; ++i) {
-        CacheBlock block(
+        auto block = std::make_shared<CacheBlock>(
             i, 
             key_cache + i * (BLOCK_SIZE*NUM_LAYERS*HEAD_DIM*NUM_HEADS*DTYPE),
             value_cache + i * (BLOCK_SIZE*NUM_LAYERS*HEAD_DIM*NUM_HEADS*DTYPE)
@@ -26,22 +26,22 @@ ErrorCode KVCacheManager::init(){
     return ErrorCode::SUCCESS;
 }
 
-variant<CacheBlock*, ErrorCode> KVCacheManager::get_cache_block(size_t block_id) {
+variant<shared_ptr<CacheBlock>, ErrorCode> KVCacheManager::get_cache_block(size_t block_id) {
     if (block_id >= num_blocks) {
         return ErrorCode::INVALID_INPUT;
     }
-    return &used_blocks[block_id];
+    return used_blocks[block_id];
 }
 
 
-variant<CacheBlock*, ErrorCode> KVCacheManager::allocate_cache_block() {
+variant<shared_ptr<CacheBlock>, ErrorCode> KVCacheManager::allocate_cache_block() {
     if (free_blocks.empty()) {
         return ErrorCode::MEMORY_FAILURE;
     }
-    CacheBlock block = free_blocks.back();
+    auto block = free_blocks.back();
     free_blocks.pop_back();
     used_blocks.push_back(block);
-    return &used_blocks.back();
+    return used_blocks.back();
 }
 
 ErrorCode KVCacheManager::free_cache_block(size_t block_id) {
@@ -49,7 +49,7 @@ ErrorCode KVCacheManager::free_cache_block(size_t block_id) {
         return ErrorCode::INVALID_INPUT;
     }
     auto it = std::find_if(used_blocks.begin(), used_blocks.end(), 
-        [block_id](const CacheBlock& block) { return block.block_id == block_id; });
+        [block_id](const shared_ptr<CacheBlock>& block) { return block->block_id == block_id; });
     if (it != used_blocks.end()) {
         free_blocks.push_back(*it);
         used_blocks.erase(it);

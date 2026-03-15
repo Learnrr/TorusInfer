@@ -3,21 +3,34 @@
 void QWEN_Model::init(ModelConfig config) {
     this->config = config;
     weights = std::make_unique<ModelWeights>();
+    weights->init(config);
     embedding =  std::make_unique<Embedding>(
         config, 
         weights->layout.embedding_weights
     );            
-    transformer_layers = std::make_unique<TransformerLayer[]>(config.num_hidden_layers);
+    layers.reserve(config.num_hidden_layers + 2); // +2 for layer norm and lm head
     for(size_t i = 0; i < config.num_hidden_layers; ++i) {
-        transformer_layers[i] = TransformerLayer(
+        auto layer_config = config.get_layer_config<TransformerLayerConfig>(i);
+
+        layers.emplace_back(std::make_unique<TransformerLayer>(
             config.hidden_size, 
             config.num_attention_heads,
-            &weights->layout.layers[i]
-        );
+            weights->layout.get_layer_layout<TransformerLayerWeightLayout>(i),
+            layer_config
+        ));
     }
+    auto layernorm_config = config.get_layer_config<LayerNormLayerConfig>(config.num_hidden_layers);
+    layers.emplace_back(std::make_unique<LayerNorm>(layernorm_config));
 
-    layer_norm = std::make_unique<LayerNorm>(config.hidden_size);
-    lm_head = std::make_unique<Linear>();
+    auto lmhead_config = config.get_layer_config<LinearLayerConfig>(config.num_hidden_layers + 1);
+    auto lm_head_layout = weights->layout.get_layer_layout<LinearLayerWeightLayout>(config.num_hidden_layers + 1);
+    layers.emplace_back(std::make_unique<Linear>(
+        lmhead_config->linear_config, 
+        config.num_hidden_layers + 1, 
+        lm_head_layout->linear_weight
+    ));
+
+    post_processor = std::make_unique<PostProcessor>(config);
 
 }
 void QWEN_Model::load_weights(const char* model_path) {
@@ -31,6 +44,8 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
         {batch.num_tokens, config.hidden_size}, 
         DataType::FLOAT16
     );
+
+
     embedding->forward(batch.token_ids, hidden, batch.num_tokens);
 
     Tensor hidden2(
@@ -41,19 +56,28 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
     );
 
     ForwardContext context;
-    
     context.batch = &batch;
     context.workspace = &workspace;
+    context.config = &config;
+
     for(size_t i = 0; i < config.num_hidden_layers; ++i) {
         context.layer_id = i;
-        transformer_layers[i].prefill_forward(hidden, hidden2, context);
+        layers[i]->prefill_forward(hidden, hidden2, context);
         Tensor tmp = hidden2;
         hidden2 = hidden;
         hidden = tmp;
     }
 
-    layer_norm->forward(hidden.data, hidden.data, context);
-    lm_head->forward(hidden, context);
+    Tensor logits_output(
+        batch.num_tokens * config.vocab_size, 
+        workspace->get_logits_workspace(),
+        {batch.num_tokens, config.vocab_size}, 
+        DataType::FLOAT16
+    );
+    
+
+    layers[config.num_hidden_layers]->prefill_forward(hidden, hidden, context);
+    layers[config.num_hidden_layers + 1]->prefill_forward(hidden, logits_output, context);
 
     
 }
@@ -77,16 +101,28 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
     ForwardContext context;
     context.batch = &batch;
     context.workspace = &workspace;
-
+    context.config = &config;
     for(size_t i = 0; i < config.num_hidden_layers; ++i) {
         context.layer_id = i;
-        transformer_layers[i].decode_forward(hidden, hidden2, context);
+        layers[i]->decode_forward(hidden, hidden2, context);
         Tensor tmp = hidden2;
         hidden2 = hidden;
         hidden = tmp;
     }
 
-    layer_norm->forward(hidden.data, hidden.data, context);
-    lm_head->forward(hidden, context);
+    Tensor logits_output(
+        batch.num_tokens * config.vocab_size, 
+        workspace->get_logits_workspace(),
+        {batch.num_tokens, config.vocab_size}, 
+        DataType::FLOAT16
+    );
+
+    layers[config.num_hidden_layers]->decode_forward(hidden, hidden, context);
+    layers[config.num_hidden_layers + 1]->decode_forward(hidden, logits_output, context);
+
+    post_processor->process(logits_output, context);
+
+    
+
     
 }

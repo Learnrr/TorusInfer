@@ -6,23 +6,41 @@
 #include "Layer.h"
 #include "ModelWeights.h"
 #include "ForwardContext.h"
+#include "ModelConfig.h"
+#include <vector>
 class MLP: public Layer {
     public:
-        MLP(int hidden_size, int intermediate_size, LayerWeightLayout* layer_layout): layer_layout(layer_layout){
-            linear1 = std::make_unique<Linear>(hidden_size, intermediate_size, 1, layer_layout);
-            linear2 = std::make_unique<Linear>(intermediate_size, hidden_size, 2, layer_layout);
-            swiglu = std::make_unique<SwiGLU>(intermediate_size);
-            self->intermediate_size = intermediate_size;
+        MLP(const MLPLayerConfig& mlp_config,
+            MLPLayerWeightLayout& layer_layout):
+             layer_layout(layer_layout), 
+             mlp_config(mlp_config){
+
+            linears.resize(mlp_config.mlp_linears.size());
+            for(size_t i = 0; i < mlp_config.mlp_linears.size(); ++i){
+                Tensor& linear_weight;
+                if (i == 0) {
+                    linear_weight = layer_layout.gate_proj_weight;
+                } else if (i == 1) {
+                    linear_weight = layer_layout.up_proj_weight;
+                } else {
+                    linear_weight = layer_layout.down_proj_weight;
+                }
+                linears[i] = std::make_unique<Linear>(
+                    mlp_config.mlp_linears[i],
+                    i+1, 
+                    linear_weight
+                );
+            }
+            swiglu = std::make_unique<SwiGLU>(mlp_config.intermediate_size);
         }
         void forward(Tensor& input, Tensor& output, ForwardContext& context) override;
     private:
 
-        std::unique_ptr<Linear> linear1;
-        std::unique_ptr<Linear> linear2;
+        std::vector<std::unique_ptr<Linear>> linears;
         std::unique_ptr<SwiGLU> swiglu;
 
-        LayerWeightLayout* layer_layout;
-        size_t intermediate_size;
+        MLPLayerWeightLayout& layer_layout;
+        MLPLayerConfig mlp_config;
 
 
 };

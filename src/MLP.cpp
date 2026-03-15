@@ -1,10 +1,21 @@
 #include "MLP.h"
 void MLP::forward(Tensor& input, Tensor& output, ForwardContext& context) {
+    if (linears.empty()) {
+        output = input;
+        return;
+    }
 
-    Tensor intermediate_output(intermediate_size, {input.shape[0], intermediate_size}, input.dtype);
+    Tensor current = input;
+    Tensor stage_output = output;
 
-    linear1->forward(input, intermediate_output, context);
-    swiglu->forward(intermediate_output, intermediate_output, context);
-    linear2->forward(intermediate_output, output, context);
+    for (size_t i = 0; i < linears.size(); ++i) {
+        linears[i]->prefill_forward(current, stage_output, context);
+        if (swiglu && i == mlp_config.activation_after_linear_idx) {
+            swiglu->forward(stage_output, stage_output, context);
+        }
+        current = stage_output;
+    }
+
+    output = current;
     
 }

@@ -21,7 +21,7 @@ class Sequence {
         size_t seq_len;
         vector<size_t> token_ids;
         SequenceState state;
-        vector<CacheBlock*> blocks;
+        vector<shared_ptr<CacheBlock>> blocks;
 
         std::mutex mtx;
         std::condition_variable cv;

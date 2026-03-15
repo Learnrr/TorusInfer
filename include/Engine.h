@@ -21,10 +21,8 @@ class Engine{
         }
 
         static Engine* get_instance() {
-            if (instance == nullptr) {
-                instance = new Engine();
-            }
-            return instance;
+            static Engine instance;
+            return &instance;
         }
 
         void init(char* model_config_path);
@@ -40,10 +38,7 @@ class Engine{
 
 
     private:
-        Engine(char* model_config_path) {
-            init(model_config_path);
-        }
-        static Engine* instance;
+        Engine() = default;
         std::unique_ptr<IModel> model;
         std::unique_ptr<Scheduler> scheduler;
         std::unique_ptr<KVCacheManager> cache_manager;
@@ -52,4 +47,4 @@ class Engine{
         std::thread runner_thread;
 
 
-}
+    };

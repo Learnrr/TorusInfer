@@ -1,22 +1,32 @@
+#pragma once
+
 #include "define.h"
 #include "Tensor.h"
 #include "Attention.h"
 #include "MLP.h"
 #include "ModelWeights.h"
+#include "ModelConfig.h"
 #include "Workspace.h"
 #include "Layer.h"
 #include "ForwardContext.h"
+#include <memory>
 
 class TransformerLayer: public Layer {
     public:
         TransformerLayer(
             int hidden_size, 
             int num_heads, 
-            LayerWeightLayout* layer_layout
+            std::shared_ptr<TransformerLayerWeightLayout> layer_layout,
+            const std::shared_ptr<TransformerLayerConfig>& layer_config
         ) {
-            attention = std::make_unique<Attention>(hidden_size, num_heads);
-            mlp = std::make_unique<MLP>(hidden_size, INTERMEDIATE_SIZE);
+            const AttentionLayerConfig& attn_config = layer_config->attention_config;
+            const MLPLayerConfig& mlp_config = layer_config->mlp_config;
+
+            attention = std::make_unique<Attention>(attn_config, layer_layout->attention_weights);
+            mlp = std::make_unique<MLP>(mlp_config, layer_layout->mlp_weights);
+
             this->layer_layout = layer_layout;
+            
         }
 
         void prefill_forward(const Tensor& input, Tensor& output, ForwardContext& context) override;
@@ -26,7 +36,7 @@ class TransformerLayer: public Layer {
     private:
         std::unique_ptr<Attention> attention;
         std::unique_ptr<MLP> mlp;
-        LayerWeightLayout* layer_layout;
+        std::shared_ptr<TransformerLayerWeightLayout> layer_layout;
 
 
-}
+};

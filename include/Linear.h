@@ -5,19 +5,22 @@
 #include "Layer.h"
 #include "ForwardContext.h"
 #include "ModelWeights.h"
+#include "ModelConfig.h"
 class Linear: public Layer {
     public:
-        Linear(int input_size, int output_size, size_t layer_id, LayerWeightLayout* layer_layout){
-            this->input_size = input_size;
-            this->output_size = output_size;
+        Linear(const LinearConfig& config, 
+            size_t layer_id, 
+            Tensor& linear_weight):
+        ){
             this->layer_id = layer_id;
-            this->layer_layout = layer_layout;
+            this->linear_weight = linear_weight;
+            this->config = config;
         }
-        void forward(Tensor& input, Tensor& output, ForwardContext& context) override;
+        void prefill_forward(const Tensor& input, Tensor& output, ForwardContext& context) override;
+        void decode_forward(const Tensor& input, Tensor& output, ForwardContext& context) override;
     private:
-        size_t input_size;
-        size_t output_size;
+        void run_linear(const Tensor& input, Tensor& output, ForwardContext& context);
         size_t layer_id;
-        LayerWeightLayout* layer_layout;
-
+        Tensor& linear_weight;
+        LinearConfig config;
 };
