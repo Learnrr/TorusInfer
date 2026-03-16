@@ -1,5 +1,7 @@
 #include "ModelWeights.h"
 #include <cstring>
+#include "include/error.h"
+#include "include/utils/logger.h"
 
 void WeightLayout::build_config(const ModelConfig& config){
     size_t offset = 0;
@@ -12,7 +14,7 @@ void WeightLayout::build_config(const ModelConfig& config){
         {config.vocab_size, config.hidden_size},
         DTYPE
     );
-    offset += embedding_weights.size * DTYPE;
+    offset += embedding_weights.size;
 
     for (const auto& layer_cfg_base : config.layer_configs) {
         if (auto transformer_cfg = std::dynamic_pointer_cast<TransformerLayerConfig>(layer_cfg_base)) {
@@ -29,7 +31,7 @@ void WeightLayout::build_config(const ModelConfig& config){
                 {config.hidden_size, qkv_hidden * 3},
                 DTYPE
             );
-            offset += transformer_layout->attention_weights.qkv_proj_weight.size * DTYPE;
+            offset += transformer_layout->attention_weights.qkv_proj_weight.size;
 
             transformer_layout->attention_weights.o_proj_weight = Tensor(
                 qkv_hidden * config.hidden_size,
@@ -37,7 +39,7 @@ void WeightLayout::build_config(const ModelConfig& config){
                 {qkv_hidden, config.hidden_size},
                 DTYPE
             );
-            offset += transformer_layout->attention_weights.o_proj_weight.size * DTYPE;
+            offset += transformer_layout->attention_weights.o_proj_weight.size;
 
             size_t intermediate_size = transformer_cfg->mlp_config.intermediate_size;
             if (intermediate_size == 0 && !transformer_cfg->mlp_config.mlp_linears.empty()) {
@@ -61,14 +63,14 @@ void WeightLayout::build_config(const ModelConfig& config){
                 transformer_layout->mlp_weights.down_proj_weight = Tensor(intermediate_size * config.hidden_size, nullptr, {intermediate_size, config.hidden_size}, DTYPE);
             }
 
-            offset += transformer_layout->mlp_weights.gate_proj_weight.size * DTYPE;
-            offset += transformer_layout->mlp_weights.up_proj_weight.size * DTYPE;
-            offset += transformer_layout->mlp_weights.down_proj_weight.size * DTYPE;
+            offset += transformer_layout->mlp_weights.gate_proj_weight.size;
+            offset += transformer_layout->mlp_weights.up_proj_weight.size;
+            offset += transformer_layout->mlp_weights.down_proj_weight.size;
 
             transformer_layout->attn_norm_weight = Tensor(config.hidden_size, nullptr, {config.hidden_size}, DTYPE);
             transformer_layout->ffn_norm_weight = Tensor(config.hidden_size, nullptr, {config.hidden_size}, DTYPE);
-            offset += transformer_layout->attn_norm_weight.size * DTYPE;
-            offset += transformer_layout->ffn_norm_weight.size * DTYPE;
+            offset += transformer_layout->attn_norm_weight.size;
+            offset += transformer_layout->ffn_norm_weight.size;
 
             layer_weights.push_back(transformer_layout);
             continue;
@@ -79,7 +81,7 @@ void WeightLayout::build_config(const ModelConfig& config){
             const size_t in_features = linear_cfg->linear_config.in_features;
             const size_t out_features = linear_cfg->linear_config.out_features;
             linear_layout->linear_weight = Tensor(in_features * out_features, nullptr, {in_features, out_features}, DTYPE);
-            offset += linear_layout->linear_weight.size * DTYPE;
+            offset += linear_layout->linear_weight.size;
             layer_weights.push_back(linear_layout);
             continue;
         }
@@ -88,7 +90,7 @@ void WeightLayout::build_config(const ModelConfig& config){
             auto norm_layout = std::make_shared<LayerNormLayerWeightLayout>();
             const size_t norm_size = norm_cfg->norm_size == 0 ? config.hidden_size : norm_cfg->norm_size;
             norm_layout->norm_weight = Tensor(norm_size, nullptr, {norm_size}, DTYPE);
-            offset += norm_layout->norm_weight.size * DTYPE;
+            offset += norm_layout->norm_weight.size;
             layer_weights.push_back(norm_layout);
             continue;
         }
@@ -101,42 +103,42 @@ void WeightLayout::build_config(const ModelConfig& config){
 void WeightLayout::build(){
     size_t offset = 0;
     embedding_weights.data = static_cast<void*>(static_cast<char*>(weights) + offset);
-    offset += embedding_weights.size * DTYPE;
+    offset += embedding_weights.size;
 
     for (size_t i = 0; i < layer_weights.size(); ++i) {
         if (auto transformer = get_layer_layout<TransformerLayerWeightLayout>(i)) {
             transformer->attention_weights.qkv_proj_weight.data = static_cast<void*>(static_cast<char*>(weights) + offset);
-            offset += transformer->attention_weights.qkv_proj_weight.size * DTYPE;
+            offset += transformer->attention_weights.qkv_proj_weight.size;
 
             transformer->attention_weights.o_proj_weight.data = static_cast<void*>(static_cast<char*>(weights) + offset);
-            offset += transformer->attention_weights.o_proj_weight.size * DTYPE;
+            offset += transformer->attention_weights.o_proj_weight.size;
 
             transformer->mlp_weights.gate_proj_weight.data = static_cast<void*>(static_cast<char*>(weights) + offset);
-            offset += transformer->mlp_weights.gate_proj_weight.size * DTYPE;
+            offset += transformer->mlp_weights.gate_proj_weight.size;
 
             transformer->mlp_weights.up_proj_weight.data = static_cast<void*>(static_cast<char*>(weights) + offset);
-            offset += transformer->mlp_weights.up_proj_weight.size * DTYPE;
+            offset += transformer->mlp_weights.up_proj_weight.size;
 
             transformer->mlp_weights.down_proj_weight.data = static_cast<void*>(static_cast<char*>(weights) + offset);
-            offset += transformer->mlp_weights.down_proj_weight.size * DTYPE;
+            offset += transformer->mlp_weights.down_proj_weight.size;
 
             transformer->attn_norm_weight.data = static_cast<void*>(static_cast<char*>(weights) + offset);
-            offset += transformer->attn_norm_weight.size * DTYPE;
+            offset += transformer->attn_norm_weight.size;
 
             transformer->ffn_norm_weight.data = static_cast<void*>(static_cast<char*>(weights) + offset);
-            offset += transformer->ffn_norm_weight.size * DTYPE;
+            offset += transformer->ffn_norm_weight.size;
             continue;
         }
 
         if (auto linear = get_layer_layout<LinearLayerWeightLayout>(i)) {
             linear->linear_weight.data = static_cast<void*>(static_cast<char*>(weights) + offset);
-            offset += linear->linear_weight.size * DTYPE;
+            offset += linear->linear_weight.size;
             continue;
         }
 
         if (auto norm = get_layer_layout<LayerNormLayerWeightLayout>(i)) {
             norm->norm_weight.data = static_cast<void*>(static_cast<char*>(weights) + offset);
-            offset += norm->norm_weight.size * DTYPE;
+            offset += norm->norm_weight.size;
             continue;
         }
     }
@@ -147,15 +149,24 @@ void ModelWeights::init(const ModelConfig& config){
     cudaMalloc(&weights, layout.total_size);
     layout.weights = weights;
     layout.build();
+    parse_header(config.model_path.c_str());
 }
         
-void ModelWeights::parse_header(const char* file_name){
+ErrorCode ModelWeights::parse_header(const char* file_name){
     std::ifstream infile(file_name, std::ios::binary);
+    if(!infile.is_open()){
+        LOG_ERROR("Failed to open model weight file: %s", file_name);
+        return ErrorCode::LOAD_ERROR;
+    }
     uint64_t header_size;
     infile.read(reinterpret_cast<char*>(&header_size), sizeof(uint64_t));
 
     char* header_data = new char[header_size];
     infile.read(header_data, header_size);
+    if(header_data == nullptr){
+        LOG_ERROR("Failed to read model weight header from file: %s", file_name);
+        return ErrorCode::LOAD_ERROR;
+    }
 
     json header_json = json::parse(header_data);
     size_t layer_idx = 0;
@@ -182,7 +193,7 @@ void ModelWeights::parse_header(const char* file_name){
     }
     delete[] header_data;
 
-
+    return ErrorCode::SUCCESS;
 }
 
 //load to cpu
@@ -194,7 +205,7 @@ Tensor ModelWeights::load_layer(std::ifstream& file, const std::string& name) {
     for (int dim : header.shape) {
         shape.push_back(static_cast<size_t>(dim));
     }
-    Tensor layer_tensor(weight_size, nullptr, shape, header.dtype);
+    Tensor layer_tensor(weight_size / Tensor::element_size_bytes(header.dtype), nullptr, shape, header.dtype);
     layer_tensor.data = malloc(weight_size);
     file.seekg(header.offset_start);
     file.read((char*)layer_tensor.data, weight_size);
@@ -207,7 +218,7 @@ Tensor ModelWeights::concat_qkv(const Tensor& Wq, const Tensor& Wk, const Tensor
     size_t H = Wq.shape[0];
 
     Tensor out(H * 3 * H, nullptr, {H, 3 * H}, Wq.dtype);
-    float* data = new float[out.size];
+    float* data = new float[H * 3 * H];
     out.data = data;
 
     float* q = (float*)Wq.data;
@@ -233,10 +244,13 @@ Tensor ModelWeights::concat_qkv(const Tensor& Wq, const Tensor& Wk, const Tensor
 }
 
 //copy from cpu to gpu
-void ModelWeights::load_weights(const char* weight_path) {
+ErrorCode ModelWeights::load_weights(const char* weight_path) {
     // Load model weights logic, e.g., read weights from file
     std::ifstream infile(weight_path, std::ios::binary);
-
+    if(!infile.is_open()){
+        LOG_ERROR("Failed to open model weight file: %s", weight_path);
+        return ErrorCode::LOAD_ERROR;
+    }
 
     Tensor tmp_layer_tensor;
     Tensor tmp_layer_tensor_k;
@@ -338,6 +352,9 @@ void ModelWeights::load_weights(const char* weight_path) {
                     tmp_layer_tensor.size, 
                     cudaMemcpyHostToDevice
                 );
+            }else{
+                LOG_ERROR("Unrecognized weight name: %s, weights may be incomplete", name.c_str());
+                continue;
             }
             //concat Wq, Wk, Wv
             Tensor Wqkv = concat_qkv(tmp_layer_tensor, tmp_layer_tensor_k, tmp_layer_tensor_v);
@@ -368,10 +385,13 @@ void ModelWeights::load_weights(const char* weight_path) {
                     cudaMemcpyHostToDevice
                 );
             }
+        } else {
+            LOG_ERROR("Unrecognized weight name: %s, weights may be incomplete", name.c_str());
+            continue;
         }
         free(tmp_layer_tensor.data);
         
     }
     
-    
+    return ErrorCode::SUCCESS;
 }

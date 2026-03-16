@@ -3,15 +3,16 @@
 #include"Sequence.h"
 #include"define.h"
 #include "KVCacheManager.h"
-#include "model/include/IModel.h"
+#include "model/IModel.h"
 #include "Batch.h"
-#include "CacheBlock.h"
+#include "Cacheblock.h"
 #include <thread>
 #include <vector>
 #include <atomic>
-#include "utils/include/error.h"
+#include "error.h"
 #include <variant>
 #include "llm_engine_config.h"
+#include <mutex>
 
 class Scheduler{
     public:
@@ -44,6 +45,8 @@ class Scheduler{
         vector<shared_ptr<Sequence>> decoding_queue;
         vector<shared_ptr<Sequence>> prefilling_queue;
         vector<shared_ptr<Sequence>> finished_queue;
+
+        std::mutex queue_mutex;
 
         KVCacheManager* cache_manager;
         IModel* model;

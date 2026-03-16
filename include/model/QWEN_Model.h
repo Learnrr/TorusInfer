@@ -1,7 +1,7 @@
 #pragma once
 
 #include "define.h"
-#include "include/Embedding.h"
+#include "layer/Embedding.h"
 #include "ModelConfig.h"
 #include "ModelWeights.h"
 #include "Batch.h"

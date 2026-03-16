@@ -11,6 +11,11 @@ void Engine::init(char* llm_engine_config_path) {
     }
 
     workspace = std::make_unique<Workspace>();
+    error = workspace->init();
+    if (error != ErrorCode::SUCCESS) {
+        // Handle workspace initialization error
+        return;
+    }
     
 
     model = ModelFactory::create_model("QWEN");
@@ -39,7 +44,7 @@ void Engine::create_sequence(size_t seq_id, vector<size_t> token_ids) {
 void Engine::get_sequence_output(size_t seq_id, vector<size_t>& output_token_ids) {
 
     std::shared_ptr<Sequence> seq;
-    ErrorCode error = scheduler->getFinishedSequenceById(seq_id, seq);
+    ErrorCode error = scheduler->getSequenceById(seq_id, seq);
     if (error != ErrorCode::SUCCESS) {
         // Handle error
         return;

@@ -1,5 +1,5 @@
 #include "Scheduler.h"
-#include "utils/include/logger.h"
+#include "utils/logger.h"
 
 
 void Scheduler::schedule() {
@@ -8,7 +8,12 @@ void Scheduler::schedule() {
 
         launchSequence();
 
-        if(!prefilling_queue.empty() || !decoding_queue.empty()){
+        bool has_decode_work = false;
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            has_decode_work = !prefilling_queue.empty() || !decoding_queue.empty();
+        }
+        if(has_decode_work){
             auto result = buildDecodeBatch();
             if (std::holds_alternative<ErrorCode>(result)) {
                 LOG_ERROR("Failed to build decode batch.");
@@ -24,7 +29,12 @@ void Scheduler::schedule() {
         
         
 
-        if(!waiting_queue.empty()){
+        bool has_waiting_work = false;
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            has_waiting_work = !waiting_queue.empty();
+        }
+        if(has_waiting_work){
             auto result = buildPrefillBatch();
             if (std::holds_alternative<ErrorCode>(result)) {
                 LOG_ERROR("Failed to build prefill batch.");
@@ -64,7 +74,7 @@ ErrorCode Scheduler::moveDecodingToFinished(const Batch& decode_batch) {
     return ErrorCode::SUCCESS;
 }
 
-void appendDecodedTokens(Batch& decode_batch) {
+void Scheduler::appendDecodedTokens(Batch& decode_batch) {
     if (decode_batch.sampled_token_ids.size() != decode_batch.sequences.size()) {
         // Model has not attached one next-token per sequence yet.
         return;
@@ -80,6 +90,7 @@ void appendDecodedTokens(Batch& decode_batch) {
 }
 
 ErrorCode Scheduler::movePrefilledToDecoding(const Batch& prefill_batch) {
+    std::lock_guard<std::mutex> lock(queue_mutex);
     for (const auto& seq : prefill_batch.sequences) {
         if (!seq) {
             continue;
@@ -102,6 +113,7 @@ ErrorCode Scheduler::movePrefilledToDecoding(const Batch& prefill_batch) {
 
 variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
     // Implement the logic to build a batch of sequences for processing
+    std::lock_guard<std::mutex> lock(queue_mutex);
     Batch batch;
     batch.batch_size = 0;
     
@@ -165,6 +177,7 @@ variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
 }
 
 variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
+    std::lock_guard<std::mutex> lock(queue_mutex);
     Batch batch;
     batch.batch_size = 0;
     
@@ -213,6 +226,7 @@ ErrorCode Scheduler::addSequence(size_t seq_id, vector<size_t> token_ids) {
     new_seq->seq_len = token_ids.size();
     new_seq->state = SequenceState::PREPARED;
     new_seq->blocks.clear();
+    std::lock_guard<std::mutex> lock(queue_mutex);
     prepared_queue.push_back(new_seq);
     LOG_DEBUG("Sequence added to prepared queue: " + std::to_string(new_seq->seq_id));
     return ErrorCode::SUCCESS;
@@ -220,6 +234,7 @@ ErrorCode Scheduler::addSequence(size_t seq_id, vector<size_t> token_ids) {
 
 
 ErrorCode Scheduler::launchSequence(){
+    std::lock_guard<std::mutex> lock(queue_mutex);
     while(!prepared_queue.empty()){
         auto seq = prepared_queue.front();
         prepared_queue.erase(prepared_queue.begin());
@@ -231,6 +246,7 @@ ErrorCode Scheduler::launchSequence(){
 }
 
 ErrorCode Scheduler::handleFinishedSequence(){
+    std::lock_guard<std::mutex> lock(queue_mutex);
     for(auto it = decoding_queue.begin(); it != decoding_queue.end();){
         if((*it)->state == SequenceState::FINISHED){
             // Handle the finished sequence (e.g., remove from decoding queue, update cache, etc.)
@@ -245,8 +261,9 @@ ErrorCode Scheduler::handleFinishedSequence(){
 }
 
 ErrorCode Scheduler::returnSequenceOutput() {
+    std::lock_guard<std::mutex> queue_lock(queue_mutex);
     for(auto& seq : finished_queue){
-        if(seq->state == SequenceState::FINISHED){
+        if(seq->state == SequenceState::FINISHED && !seq->finish_handled){
             std::lock_guard<std::mutex> lock(seq->mtx);
             seq->cv.notify_one(); 
 
@@ -255,7 +272,9 @@ ErrorCode Scheduler::returnSequenceOutput() {
                 cache_manager->free_cache_block(block->block_id);
             }
 
+            seq->finish_handled = true;
 
+            
         }
     }
     return ErrorCode::SUCCESS;
@@ -263,6 +282,7 @@ ErrorCode Scheduler::returnSequenceOutput() {
 
 ErrorCode Scheduler::getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq) {
     seq = nullptr;
+    std::lock_guard<std::mutex> lock(queue_mutex);
     for (auto& sequence : waiting_queue) {
         if (sequence->seq_id == seq_id) {
             seq = sequence;
@@ -292,6 +312,7 @@ ErrorCode Scheduler::getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& s
 
 ErrorCode Scheduler::getFinishedSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq) {
     seq = nullptr;
+    std::lock_guard<std::mutex> lock(queue_mutex);
     for (auto& sequence : finished_queue) {
         if (sequence->seq_id == seq_id) {
             seq = sequence;
@@ -302,6 +323,7 @@ ErrorCode Scheduler::getFinishedSequenceById(size_t seq_id, std::shared_ptr<Sequ
 }
 
 ErrorCode Scheduler::removeFinishedSequenceById(size_t seq_id) {
+    std::lock_guard<std::mutex> lock(queue_mutex);
     for (auto it = finished_queue.begin(); it != finished_queue.end(); ++it) {
         if (it->seq_id == seq_id) {
             finished_queue.erase(it);

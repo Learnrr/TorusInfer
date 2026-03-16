@@ -1,4 +1,5 @@
 #include "cuda_runtime.h"
+#include "projection_kernel.h"
 
 __global__ void projection_kernel(
     const void* input, 
@@ -10,10 +11,10 @@ __global__ void projection_kernel(
     size_t head_dim
 ){
     // Implement the projection kernel logic here
-    int token = blockId.x;
-    int head = blockId.y;
+    int token = blockIdx.x;
+    int head = blockIdx.y;
     int dim = threadIdx.x;
-    int qkv = blockId.z; // 0 for q, 1 for k, 2 for v
+    int qkv = blockIdx.z; // 0 for q, 1 for k, 2 for v
 
     if(token < batch_seq_len && head < num_attention_heads && dim < head_dim){
         int in_offset = token * num_attention_heads * head_dim + head * head_dim + dim;
@@ -29,7 +30,29 @@ __global__ void projection_kernel(
             float w_val = ((float*)weight)[in_d * out_features + out_col];
             sum += in_val * w_val;
         }
-        output[out_offset] = sum;
+        ((float*)output)[out_offset] = sum;
     }
 
+}
+
+void launch_projection_kernel(
+    const void* input,
+    const void* weight,
+    const void* bias,
+    void* output,
+    size_t batch_seq_len,
+    size_t num_attention_heads,
+    size_t head_dim
+) {
+    dim3 grid(batch_seq_len, num_attention_heads, 3);
+    dim3 block(head_dim);
+    projection_kernel<<<grid, block>>>(
+        input,
+        weight,
+        bias,
+        output,
+        batch_seq_len,
+        num_attention_heads,
+        head_dim
+    );
 }

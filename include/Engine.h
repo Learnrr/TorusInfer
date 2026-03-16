@@ -8,7 +8,7 @@
 #include "define.h"
 #include <vector>
 #include <thread>
-#include "utils/include/error.h"
+#include "error.h"
 #include "ModelConfig.h"
 #include "llm_engine_config.h"
 class Engine{

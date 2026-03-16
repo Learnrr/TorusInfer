@@ -30,7 +30,12 @@ variant<shared_ptr<CacheBlock>, ErrorCode> KVCacheManager::get_cache_block(size_
     if (block_id >= num_blocks) {
         return ErrorCode::INVALID_INPUT;
     }
-    return used_blocks[block_id];
+    for(const auto& block : used_blocks) {
+        if (block->block_id == block_id) {
+            return block;
+        }
+    }
+    return ErrorCode::INVALID_INPUT;
 }
 
 

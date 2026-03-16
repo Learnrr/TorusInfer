@@ -1,6 +1,7 @@
 #pragma once
 #include "define.h"
 #include "cuda_runtime.h"
+#include "error.h"
 
 struct TransformerLayerWorkspace {
     void* base;
@@ -23,14 +24,19 @@ struct WorkspaceLayout {
 
     size_t total_size;
 };
-size_t align_size(size_t size, size_t alignment = 256) {
+inline size_t align_size(size_t size, size_t alignment = 256) {
     return (size + alignment - 1) & ~(alignment - 1);
 }
 class Workspace {
     public:
-        Workspace(){}
+        Workspace() : workspace(nullptr) {}
+        Workspace(const Workspace&) = delete;
+        Workspace& operator=(const Workspace&) = delete;
 
-        void init(){
+        ErrorCode init(){
+            // Re-init should not leak the previous device buffer.
+            free();
+
             size_t hidden_size = MAX_SEQ_LEN * HIDDEN_SIZE * DTYPE;
             size_t qkv_size = MAX_SEQ_LEN * 3 * HIDDEN_SIZE * DTYPE;
             size_t attn_out_size = MAX_SEQ_LEN * HIDDEN_SIZE * DTYPE;
@@ -51,20 +57,28 @@ class Workspace {
             offset += align_size(context_size, 256);
             layout.layer_workspace.mlp_offset = offset;
             offset += align_size(mlp_size, 256);
+            layout.temp_offset = offset;
+            offset += align_size(mlp_size, 256);
             layout.logits_offset = offset;
             offset += align_size(logits_size, 256);
             layout.total_size = offset;
 
-            cudaMalloc(&workspace, layout.total_size);
+            cudaError_t cuda_error = cudaMalloc(&workspace, layout.total_size);
+            if (cuda_error != cudaSuccess) {
+                workspace = nullptr;
+                layout.layer_workspace.base = nullptr;
+                return ErrorCode::CUDA_FAILURE;
+            }
 
             layout.layer_workspace.base = workspace;
+            return ErrorCode::SUCCESS;
         }
 
-        void free() {
-            cudaFree(workspace);
-        }
 
-        ~Workspace(){}
+
+        ~Workspace(){
+            free();
+        }
 
         void* get_workspace() {
             return workspace;
@@ -80,6 +94,12 @@ class Workspace {
         }
         void* get_logits_workspace() {
             return (void*)((char*)workspace + layout.logits_offset);
+        }
+        void* get_mlp_workspace() {
+            return (void*)((char*)workspace + layout.layer_workspace.mlp_offset);
+        }
+        void* get_temp_workspace() {
+            return (void*)((char*)workspace + layout.temp_offset);
         }
         void* get_attn_score_workspace() {
             return (void*)((char*)workspace + layout.layer_workspace.qkv_offset);
@@ -97,6 +117,14 @@ class Workspace {
     private:
         void* workspace;
         WorkspaceLayout layout;
+
+        void free() {
+            if (workspace != nullptr) {
+                cudaFree(workspace);
+                workspace = nullptr;
+            }
+            layout.layer_workspace.base = nullptr;
+        }
 
 
 };

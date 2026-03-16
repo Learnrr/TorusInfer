@@ -1,14 +1,14 @@
 #pragma once
-#include "CacheBlock.h"
+#include "Cacheblock.h"
 #include "define.h"
 #include <cuda_runtime.h>
 #include "Sequence.h"
-#include "utils/include/error.h"
+#include "error.h"
 #include <variant>
 
 class KVCacheManager {
     private:
-        ErrorCode init();
+        
         void* key_cache;
         void* value_cache;
 
@@ -16,6 +16,8 @@ class KVCacheManager {
         vector<shared_ptr<CacheBlock>> used_blocks;
     public:
         KVCacheManager(){};
+
+        ErrorCode init();
         
         variant<shared_ptr<CacheBlock>, ErrorCode> get_cache_block(size_t block_id);
 

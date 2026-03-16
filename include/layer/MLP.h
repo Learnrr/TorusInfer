@@ -2,7 +2,6 @@
 #include "Linear.h"
 #include "SwiGLU.h"
 #include "Tensor.h"
-#include "Multiply.h"
 #include "Layer.h"
 #include "ModelWeights.h"
 #include "ForwardContext.h"
@@ -33,7 +32,8 @@ class MLP: public Layer {
             }
             swiglu = std::make_unique<SwiGLU>(mlp_config.intermediate_size);
         }
-        void forward(Tensor& input, Tensor& output, ForwardContext& context) override;
+        void prefill_forward(const Tensor& input, Tensor& output, ForwardContext& context) override;
+        void decode_forward(const Tensor& input, Tensor& output, ForwardContext& context) override;
     private:
 
         std::vector<std::unique_ptr<Linear>> linears;

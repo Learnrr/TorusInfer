@@ -9,21 +9,21 @@
 class Attention: public Layer {
     public:
         Attention(const AttentionLayerConfig& attention_config, 
-            AttentionLayerWeightLayout& attention_layout): 
+            AttentionLayerWeightLayout& layer_layout)
         : attention_config(attention_config), 
-        attention_layout(attention_layout) {}
+          layer_layout(layer_layout) {}
 
         void prefill_forward(const Tensor& input, Tensor& output, ForwardContext& context) override;
         void decode_forward(const Tensor& input, Tensor& output, ForwardContext& context) override;
         
     private:
         AttentionLayerConfig attention_config;
-        AttentionLayerWeightLayout& attention_layout;
+        AttentionLayerWeightLayout& layer_layout;
 
         void write_cache(ForwardContext& context, const Tensor& key, const Tensor& value);
         void split_qkv(const Tensor& qkv, Tensor& q, Tensor& k, Tensor& v, size_t batch_seq_len, size_t num_heads, size_t head_dim);
         void qkv_projection(const Tensor& input, const Tensor& weight, Tensor& qkv, size_t batch_seq_len, size_t num_heads, size_t head_dim);
-        void build_read_cache(ForwardContext& context, size_t* block_ids, size_t* block_offsets);
+        void build_read_cache(ForwardContext& context, size_t* block_ids, size_t* block_offsets, void** kcache_block_ptrs, void** vcache_block_ptrs);
         void output_projection(const Tensor& input, const Tensor& weight, Tensor& output);
 
 };

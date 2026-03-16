@@ -1,3 +1,4 @@
+#pragma once
 #include <algorithm>
 #include"ModelConfig.h"
 #include "cuda_runtime.h"
@@ -7,7 +8,7 @@
 class Embedding{
     public:
 
-        Embedding(ModelConfig config, void*, Tensor& embedding_weight_gpu) {
+        Embedding(const ModelConfig& config, Tensor& embedding_weight_gpu) {
             this->vocab_size = config.vocab_size;
             this->embedding_dim = config.hidden_size;
             this->embedding_weight_gpu = &embedding_weight_gpu;
@@ -24,4 +25,4 @@ class Embedding{
         size_t embedding_dim;
         Tensor* embedding_weight_gpu;
 
-}
+    };

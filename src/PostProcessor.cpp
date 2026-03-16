@@ -29,11 +29,18 @@ void PostProcessor::process(Tensor& input, ForwardContext& context) {
         top_k_logits.reserve(config.top_k);
         top_k(seq_logits, top_k_logits, config.top_k);
 
+        // Convert candidate logits to probabilities before nucleus filtering.
+        apply_softmax(top_k_logits);
+
         std::vector<pair<size_t, float>> top_p_logits;
         top_p_logits.reserve(top_k_logits.size());
         top_p(top_k_logits, top_p_logits, config.top_p, config.top_k);
 
-        apply_softmax(top_p_logits);
+        // Keep a valid distribution even when top_p is configured too small.
+        if (top_p_logits.empty() && !top_k_logits.empty()) {
+            top_p_logits.push_back(top_k_logits.front());
+            top_p_logits.front().second = 1.0f;
+        }
 
         size_t sampled_token = 0;
         sample(top_p_logits, sampled_token);
@@ -45,7 +52,7 @@ void PostProcessor::apply_temperature(Tensor& input, Tensor& output, float tempe
     const size_t vocab_size = config.vocab_size;
     for(int i=0; i < vocab_size; ++i){
         float logit = static_cast<float*>(input.data)[i];
-        logit /= temperature;
+        logit /= std::max(temperature, 1e-5f); // avoid division by zero
         static_cast<float*>(output.data)[i] = logit;
     }
 }
@@ -102,6 +109,17 @@ void PostProcessor::top_p(std::vector<std::pair<size_t, float>>& input, std::vec
         output.push_back(input[i]);
         if (cumulative >= top_p) {
             break;
+        }
+    }
+
+    // Re-normalize the kept probabilities before sampling.
+    float sum = 0.0f;
+    for (const auto& token_prob : output) {
+        sum += token_prob.second;
+    }
+    if (sum > 0.0f) {
+        for (auto& token_prob : output) {
+            token_prob.second /= sum;
         }
     }
 }

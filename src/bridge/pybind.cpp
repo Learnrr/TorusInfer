@@ -1,7 +1,7 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "include/Engine.h"
+#include "Engine.h"
 
 namespace py = pybind11;
 
@@ -27,8 +27,8 @@ PYBIND11_MODULE(cpp_engine, m) {
              py::arg("seq_id"),
              "Check the state of a given sequence ID");
     py::enum_<SequenceState>(m, "SequenceState")
-        .value("PREPARE", SequenceState::PREPARE)
-        .value("READY", SequenceState::READY)
+        .value("PREPARED", SequenceState::PREPARED)
+        .value("WAITING", SequenceState::WAITING)
         .value("PREFILLING", SequenceState::PREFILLING)
         .value("PREFILLED", SequenceState::PREFILLED)
         .value("DECODING", SequenceState::DECODING)
