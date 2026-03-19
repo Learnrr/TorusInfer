@@ -43,6 +43,7 @@ struct MLPLayerConfig : public LayerConfig {
 
 struct TransformerLayerConfig : public LayerConfig {
     AttentionLayerConfig attention_config;
+    std::vector<LayerNormLayerConfig> norm_configs;
     MLPLayerConfig mlp_config;
 };
 
@@ -72,6 +73,7 @@ public:
     std::string model_path;
     size_t eos_token_id;
     std::string weight_names_path;
+    std::string model_safetensors_index_json;
     size_t num_heads;
     size_t num_kv_heads;
     size_t head_dim;

@@ -6,6 +6,7 @@
 struct TransformerLayerWorkspace {
     void* base;
     size_t qkv_offset;
+    size_t attn_norm_offset;
     size_t attn_out_offset;
     size_t context_offset;
     size_t mlp_offset;
@@ -52,6 +53,8 @@ class Workspace {
             layout.layer_workspace.qkv_offset = offset;
             offset += align_size(qkv_size, 256);
             layout.layer_workspace.attn_out_offset = offset;
+            offset += align_size(attn_out_size, 256);
+            layout.layer_workspace.attn_norm_offset = offset;
             offset += align_size(attn_out_size, 256);
             layout.layer_workspace.context_offset = offset;
             offset += align_size(context_size, 256);
@@ -101,8 +104,8 @@ class Workspace {
         void* get_temp_workspace() {
             return (void*)((char*)workspace + layout.temp_offset);
         }
-        void* get_attn_score_workspace() {
-            return (void*)((char*)workspace + layout.layer_workspace.qkv_offset);
+        void* get_attn_norm_workspace() {
+            return (void*)((char*)workspace + layout.layer_workspace.attn_norm_offset);
         }
         void* get_attn_context_workspace() {
             return (void*)((char*)workspace + layout.layer_workspace.context_offset);

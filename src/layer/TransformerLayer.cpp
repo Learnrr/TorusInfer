@@ -6,20 +6,25 @@ void TransformerLayer::prefill_forward(
     Tensor& output, 
     ForwardContext& context
 ) {
-    Tensor attn_output(input.numel(), nullptr, input.shape, input.dtype);
+    Tensor norm_output(input.numel(), nullptr, input.shape, input.dtype);
+    norm_output.data = context.workspace->get_attn_norm_workspace();
+
+    Tensor attn_output(norm_output.numel(), nullptr, input.shape, input.dtype);
     attn_output.data = context.workspace->get_attn_output_workspace();
 
-    Tensor attn_residual(input.numel(), nullptr, input.shape, input.dtype);
+    Tensor attn_residual(norm_output.numel(), nullptr, input.shape, input.dtype);
     attn_residual.data = context.workspace->get_temp_workspace();
 
     Tensor mlp_output(input.numel(), nullptr, input.shape, input.dtype);
     mlp_output.data = context.workspace->get_mlp_workspace();
 
-    attention->prefill_forward(input, attn_output, context);
+    norm_layers[0]->prefill_forward(input, norm_output, context);
+    attention->prefill_forward(norm_output, attn_output, context);
     cudaMemcpy(attn_residual.data, input.data, input.size, cudaMemcpyDeviceToDevice);
     residual_add->prefill_forward(attn_output, attn_residual, context);
-
-    mlp->prefill_forward(attn_residual, mlp_output, context);
+    
+    norm_layers[1]->prefill_forward(attn_residual, norm_output, context);
+    mlp->prefill_forward(norm_output, mlp_output, context);
     cudaMemcpy(output.data, attn_residual.data, attn_residual.size, cudaMemcpyDeviceToDevice);
     residual_add->prefill_forward(mlp_output, output, context);
 }
@@ -29,6 +34,9 @@ void TransformerLayer::decode_forward(
     Tensor& output, 
     ForwardContext& context
 ) {
+    Tensor norm_output(input.numel(), nullptr, input.shape, input.dtype);
+    norm_output.data = context.workspace->get_attn_norm_workspace();
+
     Tensor attn_output(input.numel(), nullptr, input.shape, input.dtype);
     attn_output.data = context.workspace->get_attn_output_workspace();
 
@@ -38,11 +46,13 @@ void TransformerLayer::decode_forward(
     Tensor mlp_output(input.numel(), nullptr, input.shape, input.dtype);
     mlp_output.data = context.workspace->get_mlp_workspace();
 
-    attention->decode_forward(input, attn_output, context);
+    norm_layers[0]->decode_forward(input, norm_output, context);
+    attention->decode_forward(norm_output, attn_output, context);
     cudaMemcpy(attn_residual.data, input.data, input.size, cudaMemcpyDeviceToDevice);
     residual_add->decode_forward(attn_output, attn_residual, context);
 
-    mlp->decode_forward(attn_residual, mlp_output, context);
+    norm_layers[1]->decode_forward(attn_residual, norm_output, context);
+    mlp->decode_forward(norm_output, mlp_output, context);
     cudaMemcpy(output.data, attn_residual.data, attn_residual.size, cudaMemcpyDeviceToDevice);
     residual_add->decode_forward(mlp_output, output, context);
 }

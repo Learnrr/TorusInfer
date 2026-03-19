@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <unordered_map>
 #include <vector>
+#include <variant>
 
 using json = nlohmann::json;
 
@@ -17,38 +18,35 @@ struct LayerWeightLayout {
     virtual ~LayerWeightLayout() = default;
 };
 
+struct LinearLayerWeightLayout : public LayerWeightLayout {
+    Tensor linear_weight;
+    Tensor linear_bias;
+};
+
 struct AttentionLayerWeightLayout{
     //attention
     Tensor qkv_proj_weight;
     Tensor o_proj_weight;
+    Tensor qkv_proj_bias; 
+};
+
+struct LayerNormLayerWeightLayout : public LayerWeightLayout {
+    Tensor norm_weight;
 };
 
 struct MLPLayerWeightLayout{
     //mlp
-    Tensor gate_proj_weight;
-    Tensor up_proj_weight;
-    Tensor down_proj_weight;
+    std::vector<LinearLayerWeightLayout> mlp_linears_weight; 
 };
 
 struct TransformerLayerWeightLayout : public LayerWeightLayout {
     //attention
     AttentionLayerWeightLayout attention_weights;
 
+    std::vector<LayerNormLayerWeightLayout> norm_weights;
     //mlp
     MLPLayerWeightLayout mlp_weights;
 
-    //layer norm
-    Tensor attn_norm_weight;
-    Tensor ffn_norm_weight;
-
-};
-
-struct LinearLayerWeightLayout : public LayerWeightLayout {
-    Tensor linear_weight;
-};
-
-struct LayerNormLayerWeightLayout : public LayerWeightLayout {
-    Tensor norm_weight;
 };
 
 struct WeightLayout{
@@ -61,9 +59,8 @@ struct WeightLayout{
 
     void* weights;
 
-    void build_config(const ModelConfig& config);
+    ErrorCode build_weight_layout(const ModelConfig& config);
 
-    void build();
 
     template <typename T>
     std::shared_ptr<T> get_layer_layout(size_t layer_id) const {
@@ -106,6 +103,8 @@ class ModelWeights {
 
         //copy from cpu to gpu
         ErrorCode load_weights(const char* weight_path);
+
+        std::variant<ErrorCode, size_t> read_total_size(const char* model_safetensors_index_json);
 
         void* weights;
         std::unordered_map<std::string, WeightHeader> headers;
