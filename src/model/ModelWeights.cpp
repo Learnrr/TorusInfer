@@ -1,7 +1,46 @@
 #include "ModelWeights.h"
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <regex>
+#include <unordered_map>
 #include "include/error.h"
 #include "include/utils/logger.h"
+
+namespace {
+
+std::vector<std::string> ResolveSafetensorShards(const std::string& model_path) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> shards;
+
+    fs::path p(model_path);
+    if (!fs::exists(p)) {
+        return shards;
+    }
+
+    const std::string fname = p.filename().string();
+    const std::regex shard_pat(R"((.*)-(\d{5})-of-(\d{5})\.safetensors$)");
+    std::smatch m;
+    if (!std::regex_match(fname, m, shard_pat)) {
+        shards.push_back(p.string());
+        return shards;
+    }
+
+    const std::string prefix = m[1].str();
+    const int total = std::stoi(m[3].str());
+    for (int i = 1; i <= total; ++i) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%s-%05d-of-%05d.safetensors", prefix.c_str(), i, total);
+        fs::path part = p.parent_path() / buf;
+        if (fs::exists(part)) {
+            shards.push_back(part.string());
+        }
+    }
+
+    return shards;
+}
+
+} // namespace
 
 void WeightLayout::build_config(const ModelConfig& config){
     size_t offset = 0;
@@ -144,62 +183,95 @@ void WeightLayout::build(){
     }
 }
     
-void ModelWeights::init(const ModelConfig& config){
+ErrorCode ModelWeights::init(const ModelConfig& config){
     layout.build_config(config);
-    cudaMalloc(&weights, layout.total_size);
+    cudaError_t cuda_err = cudaMalloc(&weights, layout.total_size);
+    if (cuda_err != cudaSuccess) {
+        LOG_ERROR("Failed to allocate GPU memory for model weights: %s", cudaGetErrorString(cuda_err));
+        return ErrorCode::CUDA_FAILURE;
+    }
     layout.weights = weights;
     layout.build();
-    parse_header(config.model_path.c_str());
-    build_weight_names(config.weight_names_path.c_str());
+    ErrorCode error = parse_header(config.model_path.c_str());
+    if (error != ErrorCode::SUCCESS) {
+        LOG_ERROR("Failed to parse model weight header");
+        return error;
+    }
+    error = build_weight_names(config.weight_names_path.c_str());
+    if (error != ErrorCode::SUCCESS) {
+        LOG_ERROR("Failed to build weight names list");
+        return error;
+    }
+    return ErrorCode::SUCCESS;
 }
         
 ErrorCode ModelWeights::parse_header(const char* file_name){
-    std::ifstream infile(file_name, std::ios::binary);
-    if(!infile.is_open()){
-        LOG_ERROR("Failed to open model weight file: %s", file_name);
-        return ErrorCode::LOAD_ERROR;
-    }
-    uint64_t header_size;
-    infile.read(reinterpret_cast<char*>(&header_size), sizeof(uint64_t));
+    headers.clear();
 
-    char* header_data = new char[header_size];
-    infile.read(header_data, header_size);
-    if(header_data == nullptr){
-        LOG_ERROR("Failed to read model weight header from file: %s", file_name);
+    const std::vector<std::string> shards = ResolveSafetensorShards(file_name);
+    if (shards.empty()) {
+        LOG_ERROR("Failed to resolve safetensors shards from path: %s", file_name);
         return ErrorCode::LOAD_ERROR;
     }
 
-    json header_json = json::parse(header_data);
     size_t layer_idx = 0;
-    for (const auto& item : header_json.items()) {
-        std::string name = item.key();
-        const auto& value = item.value();
 
-        std::string dtype = value["dtype"].get<std::string>();
-        std::vector<int> shape = value["shape"].get<std::vector<int>>();
+    for (const auto& shard : shards) {
+        std::ifstream infile(shard, std::ios::binary);
+        if (!infile.is_open()) {
+            LOG_ERROR("Failed to open model weight file shard: %s", shard.c_str());
+            return ErrorCode::LOAD_ERROR;
+        }
 
-        size_t offset_start = value["data_offsets"][0];
-        size_t offset_end = value["data_offsets"][1];
+        uint64_t header_size = 0;
+        infile.read(reinterpret_cast<char*>(&header_size), sizeof(uint64_t));
+        if (!infile || header_size == 0) {
+            LOG_ERROR("Failed to read safetensors header size from shard: %s", shard.c_str());
+            return ErrorCode::LOAD_ERROR;
+        }
 
-        WeightHeader header = {
-            layer_idx, 
-            shape, 
-            name, 
-            offset_start + 8 + header_size, 
-            offset_end + 8 + header_size, 
-            dtype == "fp16" ? DataType::FLOAT16 : DataType::FLOAT32
-        };
-        headers[name] = header;
-        layer_idx++;
+        std::vector<char> header_data(header_size);
+        infile.read(header_data.data(), static_cast<std::streamsize>(header_size));
+        if (!infile) {
+            LOG_ERROR("Failed to read safetensors header data from shard: %s", shard.c_str());
+            return ErrorCode::LOAD_ERROR;
+        }
+
+        json header_json = json::parse(header_data.data(), header_data.data() + header_size);
+        for (const auto& item : header_json.items()) {
+            std::string name = item.key();
+            const auto& value = item.value();
+
+            std::string dtype = value["dtype"].get<std::string>();
+            std::vector<int> shape = value["shape"].get<std::vector<int>>();
+
+            size_t offset_start = value["data_offsets"][0];
+            size_t offset_end = value["data_offsets"][1];
+
+            WeightHeader header = {
+                layer_idx,
+                shape,
+                name,
+                shard,
+                offset_start + 8 + header_size,
+                offset_end + 8 + header_size,
+                dtype == "fp16" ? DataType::FLOAT16 : DataType::FLOAT32
+            };
+            headers[name] = header;
+            layer_idx++;
+        }
     }
-    delete[] header_data;
 
     return ErrorCode::SUCCESS;
 }
 
 //load to cpu
 Tensor ModelWeights::load_layer(std::ifstream& file, const std::string& name) {
-    WeightHeader header = headers[name];
+    if(headers.find(name) == headers.end()){
+        LOG_ERROR("Weight name not found in header: %s", name.c_str());
+        return Tensor();
+    }
+    const WeightHeader& header = headers[name];
     size_t weight_size = (header.offset_end - header.offset_start);
     std::vector<size_t> shape;
     shape.reserve(header.shape.size());
@@ -208,8 +280,18 @@ Tensor ModelWeights::load_layer(std::ifstream& file, const std::string& name) {
     }
     Tensor layer_tensor(weight_size / Tensor::element_size_bytes(header.dtype), nullptr, shape, header.dtype);
     layer_tensor.data = malloc(weight_size);
+    if (layer_tensor.data == nullptr) {
+        LOG_ERROR("Failed to allocate host buffer for layer: %s", name.c_str());
+        return Tensor();
+    }
     file.seekg(header.offset_start);
     file.read((char*)layer_tensor.data, weight_size);
+    if (!file) {
+        LOG_ERROR("Failed to read layer tensor bytes for: %s", name.c_str());
+        free(layer_tensor.data);
+        layer_tensor.data = nullptr;
+        return Tensor();
+    }
 
     return layer_tensor;
 
@@ -283,24 +365,47 @@ Tensor ModelWeights::concat_qkv(const Tensor& Wq, const Tensor& Wk, const Tensor
 
 //copy from cpu to gpu
 ErrorCode ModelWeights::load_weights(const char* weight_path) {
-    // Load model weights logic, e.g., read weights from file
-    std::ifstream infile(weight_path, std::ios::binary);
-    if(!infile.is_open()){
-        LOG_ERROR("Failed to open model weight file: %s", weight_path);
-        return ErrorCode::LOAD_ERROR;
-    }
+    (void)weight_path;
 
     Tensor tmp_layer_tensor;
     Tensor tmp_layer_tensor_k;
     Tensor tmp_layer_tensor_v;   
+
+    std::unordered_map<std::string, std::unique_ptr<std::ifstream>> shard_streams;
+
+    auto get_stream_for_name = [&](const std::string& name) -> std::ifstream* {
+        const auto hit = headers.find(name);
+        if (hit == headers.end()) {
+            return nullptr;
+        }
+        const std::string& shard = hit->second.shard_file;
+        auto stream_it = shard_streams.find(shard);
+        if (stream_it == shard_streams.end()) {
+            auto stream = std::make_unique<std::ifstream>(shard, std::ios::binary);
+            if (!stream->is_open()) {
+                LOG_ERROR("Failed to open shard file for tensor %s: %s", name.c_str(), shard.c_str());
+                return nullptr;
+            }
+            stream_it = shard_streams.emplace(shard, std::move(stream)).first;
+        }
+        return stream_it->second.get();
+    };
     
     bool has_q = false;
     bool has_k = false;
     bool has_v = false;
     for(const auto& name : weight_names){
 
+        std::ifstream* stream = get_stream_for_name(name);
+        if (stream == nullptr) {
+            return ErrorCode::LOAD_ERROR;
+        }
+
         if(name.find("embed_tokens") != std::string::npos){
-            tmp_layer_tensor = load_layer(infile, name);
+            tmp_layer_tensor = load_layer(*stream, name);
+            if(tmp_layer_tensor.data == nullptr){
+                return ErrorCode::LOAD_ERROR;
+            }
             cudaMemcpy(
                 layout.embedding_weights.data,
                 tmp_layer_tensor.data, 
@@ -317,7 +422,10 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                             continue;
                         }
             if(name.find("q_proj") != std::string::npos){
-                tmp_layer_tensor = load_layer(infile, name);
+                tmp_layer_tensor = load_layer(*stream, name);
+                if(tmp_layer_tensor.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
                 has_q = true;
                 /*
                 cudaMemcpy(
@@ -328,7 +436,10 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 );
                 */
             } else if(name.find("k_proj") != std::string::npos){
-                tmp_layer_tensor_k = load_layer(infile, name);
+                tmp_layer_tensor_k = load_layer(*stream, name);
+                if(tmp_layer_tensor_k.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
                 has_k = true;
                 /*
                 cudaMemcpy(
@@ -339,7 +450,10 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 );
                 */
             } else if(name.find("v_proj") != std::string::npos){
-                tmp_layer_tensor_v = load_layer(infile, name);
+                tmp_layer_tensor_v = load_layer(*stream, name);
+                if(tmp_layer_tensor_v.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
                 has_v = true;
                 /*
                 cudaMemcpy(
@@ -350,7 +464,10 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 );
                 */
             } else if(name.find("o_proj") != std::string::npos){
-                tmp_layer_tensor = load_layer(infile, name);
+                tmp_layer_tensor = load_layer(*stream, name);
+                if(tmp_layer_tensor.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
                 cudaMemcpy(
                     layer_layout->attention_weights.o_proj_weight.data,
                     tmp_layer_tensor.data, 
@@ -358,7 +475,10 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                     cudaMemcpyHostToDevice
                 );
             } else if(name.find("gate_proj") != std::string::npos){
-                tmp_layer_tensor = load_layer(infile, name);
+                tmp_layer_tensor = load_layer(*stream, name);
+                if(tmp_layer_tensor.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
                 cudaMemcpy(
                     layer_layout->mlp_weights.gate_proj_weight.data,
                     tmp_layer_tensor.data, 
@@ -366,7 +486,10 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                     cudaMemcpyHostToDevice
                 );
             } else if(name.find("up_proj") != std::string::npos){
-                tmp_layer_tensor = load_layer(infile, name);
+                tmp_layer_tensor = load_layer(*stream, name);
+                if(tmp_layer_tensor.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
                 cudaMemcpy(
                     layer_layout->mlp_weights.up_proj_weight.data,
                     tmp_layer_tensor.data, 
@@ -374,23 +497,34 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                     cudaMemcpyHostToDevice
                 );
             } else if(name.find("down_proj") != std::string::npos){
-                tmp_layer_tensor = load_layer(infile, name);
+                tmp_layer_tensor = load_layer(*stream, name);
+                if(tmp_layer_tensor.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
                 cudaMemcpy(
                     layer_layout->mlp_weights.down_proj_weight.data,
                     tmp_layer_tensor.data, 
                     tmp_layer_tensor.size, 
                     cudaMemcpyHostToDevice
                 );
-            } else if(name.find("attn_norm") != std::string::npos){
-                tmp_layer_tensor = load_layer(infile, name);
+            } else if(name.find("attn_norm") != std::string::npos ||
+                      name.find("input_layernorm") != std::string::npos){
+                tmp_layer_tensor = load_layer(*stream, name);
+                if(tmp_layer_tensor.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
                 cudaMemcpy(
                     layer_layout->attn_norm_weight.data,
                     tmp_layer_tensor.data, 
                     tmp_layer_tensor.size, 
                     cudaMemcpyHostToDevice
                 );
-            } else if(name.find("ffn_norm") != std::string::npos){
-                tmp_layer_tensor = load_layer(infile, name);
+            } else if(name.find("ffn_norm") != std::string::npos ||
+                      name.find("post_attention_layernorm") != std::string::npos){
+                tmp_layer_tensor = load_layer(*stream, name);
+                if(tmp_layer_tensor.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
                 cudaMemcpy(
                     layer_layout->ffn_norm_weight.data,
                     tmp_layer_tensor.data, 
@@ -416,17 +550,40 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 Wqkv_trans.size,
                 cudaMemcpyHostToDevice
             );
-            free(Wqkv_trans.data);
+            delete[] Wqkv_trans.data;
             Wqkv_trans.data = nullptr;
-            free(Wqkv.data);
+            delete[] Wqkv.data;
             Wqkv.data = nullptr;
 
             has_k = false;
             has_q = false;  
             has_v = false;
 
+        } else if(name.find("model.norm") != std::string::npos){
+            tmp_layer_tensor = load_layer(*stream, name);
+            if(tmp_layer_tensor.data == nullptr){
+                return ErrorCode::LOAD_ERROR;
+            }
+            std::shared_ptr<LayerNormLayerWeightLayout> final_norm_layout;
+            for (size_t i = 0; i < layout.layer_weights.size(); ++i) {
+                auto candidate = layout.get_layer_layout<LayerNormLayerWeightLayout>(i);
+                if (candidate) {
+                    final_norm_layout = candidate;
+                }
+            }
+            if (final_norm_layout) {
+                cudaMemcpy(
+                    final_norm_layout->norm_weight.data,
+                    tmp_layer_tensor.data,
+                    final_norm_layout->norm_weight.size,
+                    cudaMemcpyHostToDevice
+                );
+            }
         } else if(name.find("lm_head") != std::string::npos){
-            tmp_layer_tensor = load_layer(infile, name);
+            tmp_layer_tensor = load_layer(*stream, name);
+            if(tmp_layer_tensor.data == nullptr){
+                return ErrorCode::LOAD_ERROR;
+            }
             std::shared_ptr<LinearLayerWeightLayout> lm_head_layout;
             for (size_t i = 0; i < layout.layer_weights.size(); ++i) {
                 auto candidate = layout.get_layer_layout<LinearLayerWeightLayout>(i);

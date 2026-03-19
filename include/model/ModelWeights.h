@@ -80,6 +80,7 @@ struct WeightHeader {
     size_t layer_idx;
     std::vector<int> shape;
     std::string name;
+    std::string shard_file;
     size_t offset_start;
     size_t offset_end;
     DataType dtype;
@@ -91,9 +92,9 @@ class ModelWeights {
         ModelWeights(){};
         ~ModelWeights(){};
 
-        void init(const ModelConfig& config);
+        ErrorCode init(const ModelConfig& config);
         
-        void parse_header(const char* file_name);
+        ErrorCode parse_header(const char* file_name);
 
         // Build ordered weight-name list from a text file, one weight name per line.
         ErrorCode build_weight_names(const char* file_name);
@@ -104,7 +105,7 @@ class ModelWeights {
         Tensor concat_qkv(const Tensor& Wq, const Tensor& Wk, const Tensor& Wv);
 
         //copy from cpu to gpu
-        void load_weights(const char* weight_path);
+        ErrorCode load_weights(const char* weight_path);
 
         void* weights;
         std::unordered_map<std::string, WeightHeader> headers;

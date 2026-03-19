@@ -3,7 +3,11 @@
 void QWEN_Model::init(ModelConfig config) {
     this->config = config;
     weights = std::make_unique<ModelWeights>();
-    weights->init(config);
+    ErrorCode error = weights->init(config);
+    if (error != ErrorCode::SUCCESS) {
+        LOG_ERROR("Failed to initialize model weights");
+        return;
+    }
     embedding =  std::make_unique<Embedding>(
         config, 
         weights->layout.embedding_weights
@@ -34,7 +38,10 @@ void QWEN_Model::init(ModelConfig config) {
 
 }
 void QWEN_Model::load_weights(const char* model_path) {
-    weights->load_weights(model_path);
+    ErrorCode error = weights->load_weights(model_path);
+    if (error != ErrorCode::SUCCESS) {
+        LOG_ERROR("Failed to load model weights");
+    }
 }
 void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
     // Implement the logic for the prefill forward pass
