@@ -11,6 +11,8 @@
 #include <unordered_map>
 #include <vector>
 #include <variant>
+#include "error.h"
+#include "utils/logger.h"
 
 using json = nlohmann::json;
 
@@ -42,7 +44,7 @@ struct MLPLayerWeightLayout{
 struct TransformerLayerWeightLayout : public LayerWeightLayout {
     //attention
     AttentionLayerWeightLayout attention_weights;
-
+    //layernorm
     std::vector<LayerNormLayerWeightLayout> norm_weights;
     //mlp
     MLPLayerWeightLayout mlp_weights;

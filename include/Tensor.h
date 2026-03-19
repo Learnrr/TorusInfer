@@ -7,12 +7,7 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-enum class DataType {
-    FLOAT32,
-    FLOAT16
-};
-
+#include "define.h"
 class Tensor {
 public:
     void* data;
@@ -22,7 +17,7 @@ public:
     std::string device;
 
     Tensor()
-        : data(nullptr), size(0), dtype(DataType::FLOAT32), shape(), device("gpu") {}
+        : data(nullptr), size(0), dtype(DataType::FLOAT16), shape(), device("gpu") {}
 
     Tensor(size_t num_elements, void* data_ptr, std::vector<size_t> shape, DataType dtype, std::string device = "gpu")
         : data(data_ptr),

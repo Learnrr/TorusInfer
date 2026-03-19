@@ -1,3 +1,4 @@
+#pragma once
 
 #include <iostream>
 #include <string>
@@ -57,4 +58,4 @@ class Logger{
         static Logger* instance;
         std::ofstream log_file;
         std::mutex log_mutex;
-}
+};

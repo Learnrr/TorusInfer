@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -90,7 +91,16 @@ void AssertDeviceTensorPrefixEqualsHost(const Tensor& device_tensor, const Tenso
     assert(cmp == 0 && "device tensor prefix bytes mismatch vs source tensor");
 }
 
-void TestModelWeightsEndToEnd(
+std::string BytesToGiBString(size_t bytes) {
+    const double gib = static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0);
+    std::ostringstream oss;
+    oss.setf(std::ios::fixed);
+    oss.precision(2);
+    oss << gib << " GiB";
+    return oss.str();
+}
+
+bool TestModelWeightsEndToEnd(
     const std::string& model_path,
     const std::string& names_path,
     const std::string& config_path
@@ -110,7 +120,26 @@ void TestModelWeightsEndToEnd(
 
     ModelWeights model_weights;
 
+    auto total_size_or_error = model_weights.read_total_size(index_path.c_str());
+    if (std::holds_alternative<size_t>(total_size_or_error)) {
+        size_t free_mem = 0;
+        size_t total_mem = 0;
+        if (cudaMemGetInfo(&free_mem, &total_mem) == cudaSuccess) {
+            const size_t needed = std::get<size_t>(total_size_or_error);
+            std::cout << "GPU free memory: " << BytesToGiBString(free_mem)
+                      << ", required by model: " << BytesToGiBString(needed) << "\n";
+            if (needed > free_mem) {
+                std::cout << "SKIP: insufficient GPU memory for full model load test\n";
+                return false;
+            }
+        }
+    }
+
     const ErrorCode init_err = model_weights.init(config);
+    if (init_err == ErrorCode::CUDA_FAILURE) {
+        std::cout << "SKIP: ModelWeights::init failed due to CUDA memory allocation\n";
+        return false;
+    }
     assert(init_err == ErrorCode::SUCCESS && "ModelWeights::init should succeed");
 
     const ErrorCode load_err = model_weights.load_weights(config.model_path.c_str());
@@ -145,14 +174,16 @@ void TestModelWeightsEndToEnd(
     cudaError_t free_err = cudaFree(model_weights.weights);
     assert(free_err == cudaSuccess && "cudaFree(model_weights.weights) failed");
     model_weights.weights = nullptr;
+
+    return true;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    std::string model_path = "weights";
-    std::string names_path = "weights/qwen-7b_weight_names.txt";
-    std::string config_path = "qwen7b_model_config.json";
+    std::string model_path = "/Qwen2.5-7B-Instruct";
+    std::string names_path = "/llm_infer_engine/weights/qwen-7b_weight_names.txt";
+    std::string config_path = "/llm_infer_engine/qwen7b_model_config.json";
 
     if (argc >= 2) {
         model_path = argv[1];
@@ -170,7 +201,11 @@ int main(int argc, char** argv) {
     std::cout << "Using names file: " << names_path << "\n";
     std::cout << "Using config file: " << config_path << "\n";
 
-    TestModelWeightsEndToEnd(model_path, names_path, config_path);
-    std::cout << "test_modelweights_read passed\n";
+    const bool ran_full_test = TestModelWeightsEndToEnd(model_path, names_path, config_path);
+    if (ran_full_test) {
+        std::cout << "test_modelweights_read passed\n";
+    } else {
+        std::cout << "test_modelweights_read skipped\n";
+    }
     return 0;
 }

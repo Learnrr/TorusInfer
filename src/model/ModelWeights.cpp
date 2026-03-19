@@ -2,19 +2,15 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <sstream>
 #include <unordered_set>
 #include <unordered_map>
-#include "include/error.h"
-#include "include/utils/logger.h"
-
-namespace {
 
 std::vector<std::string> ResolveSafetensorShardsFromIndex(
     const std::filesystem::path& index_path) {
 
-    namespace fs = std::filesystem;
     std::vector<std::string> shards;
-    if (!fs::exists(index_path)) {
+    if (!std::filesystem::exists(index_path)) {
         return shards;
     }
 
@@ -37,10 +33,10 @@ std::vector<std::string> ResolveSafetensorShardsFromIndex(
     std::unordered_set<std::string> seen;
     for (const auto& item : index_json["weight_map"].items()) {
         const std::string rel_name = item.value().get<std::string>();
-        const fs::path shard_path = index_path.parent_path() / rel_name;
+        const std::filesystem::path shard_path = index_path.parent_path() / rel_name;
         const std::string shard = shard_path.string();
         if (seen.insert(shard).second) {
-            if (!fs::exists(shard_path)) {
+            if (!std::filesystem::exists(shard_path)) {
                 return {};
             }
             shards.push_back(shard);
@@ -51,22 +47,30 @@ std::vector<std::string> ResolveSafetensorShardsFromIndex(
 }
 
 std::vector<std::string> ResolveSafetensorShards(const std::string& model_path) {
-    namespace fs = std::filesystem;
-    fs::path p(model_path);
-    if (!fs::exists(p)) {
+    std::filesystem::path p(model_path);
+    if (!std::filesystem::exists(p)) {
         return {};
     }
 
-    const fs::path base_dir = fs::is_directory(p) ? p : p.parent_path();
-    const fs::path index_path = base_dir / "model.safetensors.index.json";
+    const std::filesystem::path base_dir = std::filesystem::is_directory(p) ? p : p.parent_path();
+    const std::filesystem::path index_path = base_dir / "model.safetensors.index.json";
     return ResolveSafetensorShardsFromIndex(index_path);
 }
-
-} // namespace
 
 
 ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
     size_t offset = 0;
+    const DataType layout_dtype = DataType::FLOAT16;
+    if (weights == nullptr) {
+        LOG_ERROR("build_weight_layout called with null weights pointer");
+        return ErrorCode::INVALID_INPUT;
+    }
+    {
+        std::ostringstream oss;
+        oss << "build_weight_layout begin, layer_config_count=" << config.layer_configs.size()
+            << ", weights_ptr=" << weights;
+        LOG_DEBUG(oss.str());
+    }
     layer_weights.clear();
     layer_weights.reserve(config.layer_configs.size());
     //embedding weights
@@ -74,12 +78,34 @@ ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
         config.vocab_size * config.hidden_size,
         static_cast<void*>(static_cast<char*>(weights) + offset),
         {config.vocab_size, config.hidden_size},
-        DTYPE
+        layout_dtype
     );
     offset += embedding_weights.size;
+    {
+        std::ostringstream oss;
+        oss << "layout embedding done, bytes=" << embedding_weights.size << ", offset=" << offset;
+        LOG_DEBUG(oss.str());
+    }
     //transformer layers
+    size_t cfg_idx = 0;
     for (const auto& layer_cfg_base : config.layer_configs) {
+        if (!layer_cfg_base) {
+            std::ostringstream oss;
+            oss << "null layer config at index=" << cfg_idx;
+            LOG_ERROR(oss.str());
+            return ErrorCode::INVALID_INPUT;
+        }
         if (auto transformer_cfg = std::dynamic_pointer_cast<TransformerLayerConfig>(layer_cfg_base)) {
+            {
+                std::ostringstream oss;
+                oss << "layout cfg_idx=" << cfg_idx
+                    << " type=Transformer"
+                    << " q_heads=" << transformer_cfg->attention_config.num_attention_heads
+                    << " kv_heads=" << transformer_cfg->attention_config.num_kv_heads
+                    << " head_dim=" << transformer_cfg->attention_config.head_dim
+                    << " mlp_linears=" << transformer_cfg->mlp_config.mlp_linears.size();
+                LOG_DEBUG(oss.str());
+            }
             auto transformer_layout = std::make_shared<TransformerLayerWeightLayout>();
 
             //attention qkv weights
@@ -94,17 +120,29 @@ ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
                 config.hidden_size * (q_hidden + 2 * kv_hidden),
                 static_cast<void*>(static_cast<char*>(weights) + offset),
                 {config.hidden_size, q_hidden + 2 * kv_hidden},
-                DTYPE
+                layout_dtype
             );
             offset += transformer_layout->attention_weights.qkv_proj_weight.size;
+            {
+                std::ostringstream oss;
+                oss << "  qkv_proj bytes=" << transformer_layout->attention_weights.qkv_proj_weight.size
+                    << ", offset=" << offset;
+                LOG_DEBUG(oss.str());
+            }
             //attention output projection weights
             transformer_layout->attention_weights.o_proj_weight = Tensor(
                 q_hidden * config.hidden_size,
                 static_cast<void*>(static_cast<char*>(weights) + offset),
                 {q_hidden, config.hidden_size},
-                DTYPE
+                layout_dtype
             );
             offset += transformer_layout->attention_weights.o_proj_weight.size;
+            {
+                std::ostringstream oss;
+                oss << "  o_proj bytes=" << transformer_layout->attention_weights.o_proj_weight.size
+                    << ", offset=" << offset;
+                LOG_DEBUG(oss.str());
+            }
             //layer norm weights
             transformer_layout->norm_weights.resize(2);
             transformer_layout->norm_weights[0] = LayerNormLayerWeightLayout();
@@ -113,16 +151,23 @@ ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
                 config.hidden_size,
                 static_cast<void*>(static_cast<char*>(weights) + offset),
                 {config.hidden_size},
-                DTYPE
+                layout_dtype
             );
             offset += transformer_layout->norm_weights[0].norm_weight.size;
             transformer_layout->norm_weights[1].norm_weight = Tensor(
                 config.hidden_size,
                 static_cast<void*>(static_cast<char*>(weights) + offset),
                 {config.hidden_size},
-                DTYPE
+                layout_dtype
             );
             offset += transformer_layout->norm_weights[1].norm_weight.size;
+            {
+                std::ostringstream oss;
+                oss << "  norms bytes="
+                    << (transformer_layout->norm_weights[0].norm_weight.size + transformer_layout->norm_weights[1].norm_weight.size)
+                    << ", offset=" << offset;
+                LOG_DEBUG(oss.str());
+            }
 
 
             //mlp weights
@@ -130,32 +175,57 @@ ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
             if (intermediate_size == 0 && !transformer_cfg->mlp_config.mlp_linears.empty()) {
                 intermediate_size = transformer_cfg->mlp_config.mlp_linears[0].out_features;
             }
+            transformer_layout->mlp_weights.mlp_linears_weight.clear();
+            transformer_layout->mlp_weights.mlp_linears_weight.reserve(
+                transformer_cfg->mlp_config.mlp_linears.size()
+            );
             for(const auto& linear_cfg : transformer_cfg->mlp_config.mlp_linears){
-                LinearLayerWeightLayout linear_layout;
+                transformer_layout->mlp_weights.mlp_linears_weight.emplace_back();
+                auto& linear_layout = transformer_layout->mlp_weights.mlp_linears_weight.back();
                 linear_layout.linear_weight = Tensor(
                     linear_cfg.in_features * linear_cfg.out_features,
                     static_cast<void*>(static_cast<char*>(weights) + offset),
                     {linear_cfg.in_features, linear_cfg.out_features},
-                    DTYPE
+                    layout_dtype
                 );
                 offset += linear_layout.linear_weight.size;
+                {
+                    std::ostringstream oss;
+                    oss << "  mlp linear weight bytes=" << linear_layout.linear_weight.size
+                        << ", in=" << linear_cfg.in_features << ", out=" << linear_cfg.out_features
+                        << ", offset=" << offset;
+                    LOG_DEBUG(oss.str());
+                }
                 if (transformer_cfg->mlp_config.has_bias) {
                     linear_layout.linear_bias = Tensor(
                         linear_cfg.out_features,
                         static_cast<void*>(static_cast<char*>(weights) + offset),
                         {linear_cfg.out_features},
-                        DTYPE
+                        layout_dtype
                     );
                     offset += linear_layout.linear_bias.size;
+                    {
+                        std::ostringstream oss;
+                        oss << "  mlp linear bias bytes=" << linear_layout.linear_bias.size
+                            << ", offset=" << offset;
+                        LOG_DEBUG(oss.str());
+                    }
                 }
-                transformer_layout->mlp_weights.mlp_linears_weight.push_back(linear_layout);
             }
 
             layer_weights.push_back(transformer_layout);
+            ++cfg_idx;
             continue;
         }
 
         if (auto linear_cfg = std::dynamic_pointer_cast<LinearLayerConfig>(layer_cfg_base)) {
+            {
+                std::ostringstream oss;
+                oss << "layout cfg_idx=" << cfg_idx << " type=Linear"
+                    << " in=" << linear_cfg->linear_config.in_features
+                    << " out=" << linear_cfg->linear_config.out_features;
+                LOG_DEBUG(oss.str());
+            }
             auto linear_layout = std::make_shared<LinearLayerWeightLayout>();
             const size_t in_features = linear_cfg->linear_config.in_features;
             const size_t out_features = linear_cfg->linear_config.out_features;
@@ -163,27 +233,49 @@ ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
                 in_features * out_features, 
                 static_cast<void*>(static_cast<char*>(weights) + offset),
                 {in_features, out_features}, 
-                DTYPE
+                DataType::FLOAT16
             );
             offset += linear_layout->linear_weight.size;
             layer_weights.push_back(linear_layout);
+            ++cfg_idx;
             continue;
         }
 
         if (auto norm_cfg = std::dynamic_pointer_cast<LayerNormLayerConfig>(layer_cfg_base)) {
+            {
+                std::ostringstream oss;
+                oss << "layout cfg_idx=" << cfg_idx << " type=LayerNorm"
+                    << " size=" << (norm_cfg->norm_size == 0 ? config.hidden_size : norm_cfg->norm_size);
+                LOG_DEBUG(oss.str());
+            }
             auto norm_layout = std::make_shared<LayerNormLayerWeightLayout>();
             const size_t norm_size = norm_cfg->norm_size == 0 ? config.hidden_size : norm_cfg->norm_size;
             norm_layout->norm_weight = Tensor(
                 norm_size, 
                 static_cast<void*>(static_cast<char*>(weights) + offset), 
                 {norm_size}, 
-                DTYPE
+                DataType::FLOAT16
             );
             offset += norm_layout->norm_weight.size;
             layer_weights.push_back(norm_layout);
+            ++cfg_idx;
             continue;
         }
+
+        {
+            std::ostringstream oss;
+            oss << "Unknown layer config type at index=" << cfg_idx;
+            LOG_ERROR(oss.str());
+        }
+        return ErrorCode::INVALID_INPUT;
     }
+    {
+        std::ostringstream oss;
+        oss << "build_weight_layout finished, total offset=" << offset
+            << ", layer_weights=" << layer_weights.size();
+        LOG_DEBUG(oss.str());
+    }
+    total_size = offset;
     return ErrorCode::SUCCESS;
 }
 
@@ -210,6 +302,7 @@ std::variant<ErrorCode, size_t> ModelWeights::read_total_size(const char* model_
 }
     
 ErrorCode ModelWeights::init(const ModelConfig& config){
+    LOG_DEBUG("ModelWeights::init begin");
 
     //parse header
     ErrorCode error = parse_header(config.model_path.c_str());
@@ -217,11 +310,21 @@ ErrorCode ModelWeights::init(const ModelConfig& config){
         LOG_ERROR("Failed to parse model weight header");
         return error;
     }
+    {
+        std::ostringstream oss;
+        oss << "parse_header success, headers=" << headers.size();
+        LOG_DEBUG(oss.str());
+    }
     //build weight names list in sequence
     error = build_weight_names(config.weight_names_path.c_str());
     if (error != ErrorCode::SUCCESS) {
         LOG_ERROR("Failed to build weight names list");
         return error;
+    }
+    {
+        std::ostringstream oss;
+        oss << "build_weight_names success, weight_names=" << weight_names.size();
+        LOG_DEBUG(oss.str());
     }
     //read total size from safetensors index json
     auto total_size_or_error = read_total_size(
@@ -231,19 +334,42 @@ ErrorCode ModelWeights::init(const ModelConfig& config){
         LOG_ERROR("Failed to read total size from safetensors index");
         return std::get<ErrorCode>(total_size_or_error);
     }
+    {
+        std::ostringstream oss;
+        oss << "read_total_size success, bytes=" << std::get<size_t>(total_size_or_error);
+        LOG_DEBUG(oss.str());
+    }
     //allocate gpu memory for weights
-    cudaError_t cuda_err = cudaMalloc(&weights, std::get<size_t>(total_size_or_error));
+    const size_t allocated_bytes = std::get<size_t>(total_size_or_error);
+    cudaError_t cuda_err = cudaMalloc(&weights, allocated_bytes);
     if (cuda_err != cudaSuccess) {
-        LOG_ERROR("Failed to allocate GPU memory for model weights: %s", cudaGetErrorString(cuda_err));
+        LOG_ERROR("Failed to allocate GPU memory for model weights ");
         return ErrorCode::CUDA_FAILURE;
     }
+    {
+        std::ostringstream oss;
+        oss << "cudaMalloc success, ptr=" << weights;
+        LOG_DEBUG(oss.str());
+    }
     //build weight layout
+    LOG_DEBUG("calling build_weight_layout");
     layout.weights = weights;
     ErrorCode build_weight_layout_error = layout.build_weight_layout(config);
     if (build_weight_layout_error != ErrorCode::SUCCESS) {
         LOG_ERROR("Failed to build weight layout");
         return build_weight_layout_error;
     }
+    {
+        std::ostringstream oss;
+        oss << "layout.total_size=" << layout.total_size
+            << ", allocated_bytes=" << allocated_bytes;
+        LOG_DEBUG(oss.str());
+    }
+    if (layout.total_size > allocated_bytes) {
+        LOG_ERROR("Weight layout exceeds allocated GPU memory; model config likely mismatches real weights");
+        return ErrorCode::INVALID_INPUT;
+    }
+    LOG_DEBUG("build_weight_layout success");
 
     return ErrorCode::SUCCESS;
 }
@@ -253,8 +379,13 @@ ErrorCode ModelWeights::parse_header(const char* file_name){
 
     const std::vector<std::string> shards = ResolveSafetensorShards(file_name);
     if (shards.empty()) {
-        LOG_ERROR("Failed to resolve safetensors shards from path: %s", file_name);
+        LOG_ERROR("Failed to resolve safetensors shards from path:");
         return ErrorCode::LOAD_ERROR;
+    }
+    {
+        std::ostringstream oss;
+        oss << "parse_header shard_count=" << shards.size();
+        LOG_DEBUG(oss.str());
     }
 
     size_t layer_idx = 0;
@@ -262,21 +393,26 @@ ErrorCode ModelWeights::parse_header(const char* file_name){
     for (const auto& shard : shards) {
         std::ifstream infile(shard, std::ios::binary);
         if (!infile.is_open()) {
-            LOG_ERROR("Failed to open model weight file shard: %s", shard.c_str());
+            LOG_ERROR("Failed to open model weight file shard: ");
             return ErrorCode::LOAD_ERROR;
         }
 
         uint64_t header_size = 0;
         infile.read(reinterpret_cast<char*>(&header_size), sizeof(uint64_t));
         if (!infile || header_size == 0) {
-            LOG_ERROR("Failed to read safetensors header size from shard: %s", shard.c_str());
+            LOG_ERROR("Failed to read safetensors header size from shard");
             return ErrorCode::LOAD_ERROR;
+        }
+        {
+            std::ostringstream oss;
+            oss << "parse_header shard=" << shard << ", header_size=" << header_size;
+            LOG_DEBUG(oss.str());
         }
 
         std::vector<char> header_data(header_size);
         infile.read(header_data.data(), static_cast<std::streamsize>(header_size));
         if (!infile) {
-            LOG_ERROR("Failed to read safetensors header data from shard: %s", shard.c_str());
+            LOG_ERROR("Failed to read safetensors header data from shard");
             return ErrorCode::LOAD_ERROR;
         }
 
@@ -291,7 +427,7 @@ ErrorCode ModelWeights::parse_header(const char* file_name){
             if (!value.is_object() || !value.contains("dtype") || !value.contains("shape") ||
                 !value.contains("data_offsets") || !value["data_offsets"].is_array() ||
                 value["data_offsets"].size() != 2) {
-                LOG_ERROR("Malformed tensor entry in safetensors header: %s", name.c_str());
+                LOG_ERROR("Malformed tensor entry in safetensors header");
                 return ErrorCode::LOAD_ERROR;
             }
 
@@ -307,7 +443,7 @@ ErrorCode ModelWeights::parse_header(const char* file_name){
             } else if (dtype == "fp32" || dtype == "F32") {
                 parsed_dtype = DataType::FLOAT32;
             } else {
-                LOG_ERROR("Unsupported tensor dtype in safetensors header: %s (%s)", name.c_str(), dtype.c_str());
+                LOG_ERROR("Unsupported tensor dtype in safetensors header");
                 return ErrorCode::LOAD_ERROR;
             }
 
@@ -325,13 +461,19 @@ ErrorCode ModelWeights::parse_header(const char* file_name){
         }
     }
 
+    {
+        std::ostringstream oss;
+        oss << "parse_header finished, total headers=" << headers.size();
+        LOG_DEBUG(oss.str());
+    }
+
     return ErrorCode::SUCCESS;
 }
 
 //load to cpu
 Tensor ModelWeights::load_layer(std::ifstream& file, const std::string& name) {
     if(headers.find(name) == headers.end()){
-        LOG_ERROR("Weight name not found in header: %s", name.c_str());
+        LOG_ERROR("Weight name not found in header");
         return Tensor();
     }
     const WeightHeader& header = headers[name];
@@ -344,13 +486,13 @@ Tensor ModelWeights::load_layer(std::ifstream& file, const std::string& name) {
     Tensor layer_tensor(weight_size / Tensor::element_size_bytes(header.dtype), nullptr, shape, header.dtype);
     layer_tensor.data = malloc(weight_size);
     if (layer_tensor.data == nullptr) {
-        LOG_ERROR("Failed to allocate host buffer for layer: %s", name.c_str());
+        LOG_ERROR("Failed to allocate host buffer for layer");
         return Tensor();
     }
     file.seekg(header.offset_start);
     file.read((char*)layer_tensor.data, weight_size);
     if (!file) {
-        LOG_ERROR("Failed to read layer tensor bytes for: %s", name.c_str());
+        LOG_ERROR("Failed to read layer tensor bytes");
         free(layer_tensor.data);
         layer_tensor.data = nullptr;
         return Tensor();
@@ -362,7 +504,7 @@ Tensor ModelWeights::load_layer(std::ifstream& file, const std::string& name) {
 ErrorCode ModelWeights::build_weight_names(const char* file_name){
     std::ifstream infile(file_name);
     if(!infile.is_open()){
-        LOG_ERROR("Failed to open model weight file: %s", file_name);
+        LOG_ERROR("Failed to open model weight file");
         return ErrorCode::LOAD_ERROR;
     }
 
@@ -381,21 +523,44 @@ ErrorCode ModelWeights::build_weight_names(const char* file_name){
         weight_names.push_back(name);
     }
 
+    {
+        std::ostringstream oss;
+        oss << "build_weight_names loaded=" << weight_names.size();
+        LOG_DEBUG(oss.str());
+    }
+
     return ErrorCode::SUCCESS;
 }
 //concat qkv on cpu
 Tensor ModelWeights::concat_qkv(const Tensor& Wq, const Tensor& Wk, const Tensor& Wv){
-    size_t H = Wq.shape[0];
+    if (Wq.shape.size() != 2 || Wk.shape.size() != 2 || Wv.shape.size() != 2) {
+        LOG_ERROR("concat_qkv expects 2D tensors");
+        return Tensor();
+    }
+    if (Wq.dtype != Wk.dtype || Wq.dtype != Wv.dtype) {
+        LOG_ERROR("concat_qkv dtype mismatch");
+        return Tensor();
+    }
+
+    // HF/Qwen linear weights are [out_features, in_features].
+    // Q/K/V must share in_features and be concatenated on out_features (row dimension),
+    // then transposes to [in_features, out_features_total].
+    const size_t q_rows = Wq.shape[0];
+    const size_t k_rows = Wk.shape[0];
+    const size_t v_rows = Wv.shape[0];
+    const size_t in_cols = Wq.shape[1];
+    if (Wk.shape[1] != in_cols || Wv.shape[1] != in_cols) {
+        LOG_ERROR("concat_qkv shape mismatch on input feature dimension");
+        return Tensor();
+    }
+
     const size_t elem_size = Tensor::element_size_bytes(Wq.dtype);
-    const size_t q_cols = Wq.shape[1];
-    const size_t k_cols = Wk.shape[1];
-    const size_t v_cols = Wv.shape[1];
-    const size_t out_cols = q_cols + k_cols + v_cols;
+    const size_t out_rows = q_rows + k_rows + v_rows;
 
     Tensor out(
-        Wq.shape[0] * out_cols,
+        out_rows * in_cols,
         nullptr, 
-        {H, out_cols}, 
+        {out_rows, in_cols}, 
         Wq.dtype,
         "cpu"
     );
@@ -407,31 +572,13 @@ Tensor ModelWeights::concat_qkv(const Tensor& Wq, const Tensor& Wk, const Tensor
     const char* k = static_cast<const char*>(Wk.data);
     const char* v = static_cast<const char*>(Wv.data);
 
-    for (size_t i = 0; i < H; i++) {
-        const size_t row_out_elems = out_cols;
-        const size_t q_row_bytes = q_cols * elem_size;
-        const size_t k_row_bytes = k_cols * elem_size;
-        const size_t v_row_bytes = v_cols * elem_size;
-        char* out_row = data + i * row_out_elems * elem_size;
+    const size_t q_bytes = q_rows * in_cols * elem_size;
+    const size_t k_bytes = k_rows * in_cols * elem_size;
+    const size_t v_bytes = v_rows * in_cols * elem_size;
 
-        memcpy(
-            out_row,
-            q + i * q_row_bytes,
-            q_row_bytes
-        );
-
-        memcpy(
-            out_row + q_row_bytes,
-            k + i * k_row_bytes,
-            k_row_bytes
-        );
-
-        memcpy(
-            out_row + q_row_bytes + k_row_bytes,
-            v + i * v_row_bytes,
-            v_row_bytes
-        );
-    }
+    std::memcpy(data, q, q_bytes);
+    std::memcpy(data + q_bytes, k, k_bytes);
+    std::memcpy(data + q_bytes + k_bytes, v, v_bytes);
 
     return out;
 }
@@ -439,6 +586,7 @@ Tensor ModelWeights::concat_qkv(const Tensor& Wq, const Tensor& Wk, const Tensor
 //copy from cpu to gpu
 ErrorCode ModelWeights::load_weights(const char* weight_path) {
     (void)weight_path;
+    LOG_DEBUG("load_weights begin");
 
     Tensor tmp_layer_tensor_q;
     Tensor tmp_layer_tensor_k;
@@ -456,7 +604,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
         if (stream_it == shard_streams.end()) {
             auto stream = std::make_unique<std::ifstream>(shard, std::ios::binary);
             if (!stream->is_open()) {
-                LOG_ERROR("Failed to open shard file for tensor %s: %s", name.c_str(), shard.c_str());
+                LOG_ERROR("Failed to open shard file for tensor ");
                 return nullptr;
             }
             stream_it = shard_streams.emplace(shard, std::move(stream)).first;
@@ -467,10 +615,18 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
     bool has_q = false;
     bool has_k = false;
     bool has_v = false;
+    size_t idx = 0;
     for(const auto& name : weight_names){
+        {
+            std::ostringstream oss;
+            oss << "load_weights idx=" << idx << ", name=" << name;
+            LOG_DEBUG(oss.str());
+        }
+        ++idx;
 
         std::ifstream* stream = get_stream_for_name(name);
         if (stream == nullptr) {
+            LOG_ERROR("load_weights stream resolve failed");
             return ErrorCode::LOAD_ERROR;
         }
 
@@ -479,12 +635,27 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
             if(tmp_layer_tensor.data == nullptr){
                 return ErrorCode::LOAD_ERROR;
             }
-            cudaMemcpy(
+            if (tmp_layer_tensor.size != layout.embedding_weights.size) {
+                std::ostringstream oss;
+                oss << "embed_tokens tensor size mismatch, src=" << tmp_layer_tensor.size
+                    << ", dst=" << layout.embedding_weights.size;
+                LOG_ERROR(oss.str());
+                free(tmp_layer_tensor.data);
+                tmp_layer_tensor.data = nullptr;
+                return ErrorCode::INVALID_INPUT;
+            }
+            cudaError_t copy_err = cudaMemcpy(
                 layout.embedding_weights.data,
                 tmp_layer_tensor.data, 
                 layout.embedding_weights.size, 
                 cudaMemcpyHostToDevice
             );
+            if (copy_err != cudaSuccess) {
+                LOG_ERROR("cudaMemcpy embed_tokens failed");
+                free(tmp_layer_tensor.data);
+                tmp_layer_tensor.data = nullptr;
+                return ErrorCode::CUDA_FAILURE;
+            }
             free(tmp_layer_tensor.data);
             tmp_layer_tensor.data = nullptr;
         } else if(name.find("layers.") != std::string::npos){
@@ -492,8 +663,9 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
             size_t pos2 = name.find(".", pos1);
             size_t layer_id = std::stoi(name.substr(pos1, pos2 - pos1));
 
-            std::shared_ptr<TransformerLayerWeightLayout> layer_layout = layout.get_layer_layout<TransformerLayerWeightLayout>(layer_id);
+            auto layer_layout = layout.get_layer_layout<TransformerLayerWeightLayout>(layer_id);
             if (!layer_layout) {
+                LOG_ERROR("Transformer layer layout missing");
                 continue;
             }
             if(name.find("q_proj") != std::string::npos){
@@ -522,81 +694,191 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 if(tmp_layer_tensor.data == nullptr){
                     return ErrorCode::LOAD_ERROR;
                 }
-                cudaMemcpy(
+                if (tmp_layer_tensor.size != layer_layout->attention_weights.o_proj_weight.size) {
+                    std::ostringstream oss;
+                    oss << "o_proj tensor size mismatch, src=" << tmp_layer_tensor.size
+                        << ", dst=" << layer_layout->attention_weights.o_proj_weight.size;
+                    LOG_ERROR(oss.str());
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::INVALID_INPUT;
+                }
+                cudaError_t copy_err = cudaMemcpy(
                     layer_layout->attention_weights.o_proj_weight.data,
                     tmp_layer_tensor.data, 
                     tmp_layer_tensor.size, 
                     cudaMemcpyHostToDevice
                 );
+                if (copy_err != cudaSuccess) {
+                    LOG_ERROR("cudaMemcpy o_proj failed");
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::CUDA_FAILURE;
+                }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
             } else if(name.find("gate_proj") != std::string::npos){
+                if (layer_layout->mlp_weights.mlp_linears_weight.size() < 3) {
+                    LOG_ERROR("MLP linear layouts are insufficient");
+                    return ErrorCode::LOAD_ERROR;
+                }
                 Tensor tmp_layer_tensor = load_layer(*stream, name);
                 if(tmp_layer_tensor.data == nullptr){
                     return ErrorCode::LOAD_ERROR;
                 }
-                cudaMemcpy(
+                if (tmp_layer_tensor.size != layer_layout->mlp_weights.mlp_linears_weight[0].linear_weight.size) {
+                    std::ostringstream oss;
+                    oss << "gate_proj tensor size mismatch, src=" << tmp_layer_tensor.size
+                        << ", dst=" << layer_layout->mlp_weights.mlp_linears_weight[0].linear_weight.size;
+                    LOG_ERROR(oss.str());
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::INVALID_INPUT;
+                }
+                cudaError_t copy_err = cudaMemcpy(
                     layer_layout->mlp_weights.mlp_linears_weight[0].linear_weight.data,
                     tmp_layer_tensor.data, 
                     tmp_layer_tensor.size, 
                     cudaMemcpyHostToDevice
                 );
+                if (copy_err != cudaSuccess) {
+                    LOG_ERROR("cudaMemcpy gate_proj failed");
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::CUDA_FAILURE;
+                }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
             } else if(name.find("up_proj") != std::string::npos){
+                if (layer_layout->mlp_weights.mlp_linears_weight.size() < 3) {
+                    LOG_ERROR("MLP linear layouts are insufficient");
+                    return ErrorCode::LOAD_ERROR;
+                }
                 Tensor tmp_layer_tensor = load_layer(*stream, name);
                 if(tmp_layer_tensor.data == nullptr){
                     return ErrorCode::LOAD_ERROR;
                 }
-                cudaMemcpy(
+                if (tmp_layer_tensor.size != layer_layout->mlp_weights.mlp_linears_weight[1].linear_weight.size) {
+                    std::ostringstream oss;
+                    oss << "up_proj tensor size mismatch, src=" << tmp_layer_tensor.size
+                        << ", dst=" << layer_layout->mlp_weights.mlp_linears_weight[1].linear_weight.size;
+                    LOG_ERROR(oss.str());
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::INVALID_INPUT;
+                }
+                cudaError_t copy_err = cudaMemcpy(
                     layer_layout->mlp_weights.mlp_linears_weight[1].linear_weight.data,
                     tmp_layer_tensor.data, 
                     tmp_layer_tensor.size, 
                     cudaMemcpyHostToDevice
                 );
+                if (copy_err != cudaSuccess) {
+                    LOG_ERROR("cudaMemcpy up_proj failed");
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::CUDA_FAILURE;
+                }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
             } else if(name.find("down_proj") != std::string::npos){
+                if (layer_layout->mlp_weights.mlp_linears_weight.size() < 3) {
+                    LOG_ERROR("MLP linear layouts are insufficient");
+                    return ErrorCode::LOAD_ERROR;
+                }
                 Tensor tmp_layer_tensor = load_layer(*stream, name);
                 if(tmp_layer_tensor.data == nullptr){
                     return ErrorCode::LOAD_ERROR;
                 }
-                cudaMemcpy(
+                if (tmp_layer_tensor.size != layer_layout->mlp_weights.mlp_linears_weight[2].linear_weight.size) {
+                    std::ostringstream oss;
+                    oss << "down_proj tensor size mismatch, src=" << tmp_layer_tensor.size
+                        << ", dst=" << layer_layout->mlp_weights.mlp_linears_weight[2].linear_weight.size;
+                    LOG_ERROR(oss.str());
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::INVALID_INPUT;
+                }
+                cudaError_t copy_err = cudaMemcpy(
                     layer_layout->mlp_weights.mlp_linears_weight[2].linear_weight.data,
                     tmp_layer_tensor.data, 
                     tmp_layer_tensor.size, 
                     cudaMemcpyHostToDevice
                 );
+                if (copy_err != cudaSuccess) {
+                    LOG_ERROR("cudaMemcpy down_proj failed");
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::CUDA_FAILURE;
+                }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
             } else if(name.find("input_layernorm") != std::string::npos){
+                if (layer_layout->norm_weights.size() < 2) {
+                    LOG_ERROR("Norm layouts are insufficient");
+                    return ErrorCode::LOAD_ERROR;
+                }
                 Tensor tmp_layer_tensor = load_layer(*stream, name);
                 if(tmp_layer_tensor.data == nullptr){
                     return ErrorCode::LOAD_ERROR;
                 }
-                cudaMemcpy(
+                if (tmp_layer_tensor.size != layer_layout->norm_weights[0].norm_weight.size) {
+                    std::ostringstream oss;
+                    oss << "input_layernorm tensor size mismatch, src=" << tmp_layer_tensor.size
+                        << ", dst=" << layer_layout->norm_weights[0].norm_weight.size;
+                    LOG_ERROR(oss.str());
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::INVALID_INPUT;
+                }
+                cudaError_t copy_err = cudaMemcpy(
                     layer_layout->norm_weights[0].norm_weight.data,
                     tmp_layer_tensor.data, 
                     tmp_layer_tensor.size, 
                     cudaMemcpyHostToDevice
                 );
+                if (copy_err != cudaSuccess) {
+                    LOG_ERROR("cudaMemcpy input_layernorm failed");
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::CUDA_FAILURE;
+                }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
             } else if(name.find("post_attention_layernorm") != std::string::npos){
+                if (layer_layout->norm_weights.size() < 2) {
+                    LOG_ERROR("Norm layouts are insufficient");
+                    return ErrorCode::LOAD_ERROR;
+                }
                 Tensor tmp_layer_tensor = load_layer(*stream, name);
                 if(tmp_layer_tensor.data == nullptr){
                     return ErrorCode::LOAD_ERROR;
                 }
-                cudaMemcpy(
+                if (tmp_layer_tensor.size != layer_layout->norm_weights[1].norm_weight.size) {
+                    std::ostringstream oss;
+                    oss << "post_attention_layernorm tensor size mismatch, src=" << tmp_layer_tensor.size
+                        << ", dst=" << layer_layout->norm_weights[1].norm_weight.size;
+                    LOG_ERROR(oss.str());
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::INVALID_INPUT;
+                }
+                cudaError_t copy_err = cudaMemcpy(
                     layer_layout->norm_weights[1].norm_weight.data,
                     tmp_layer_tensor.data, 
                     tmp_layer_tensor.size, 
                     cudaMemcpyHostToDevice
                 );
+                if (copy_err != cudaSuccess) {
+                    LOG_ERROR("cudaMemcpy post_attention_layernorm failed");
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::CUDA_FAILURE;
+                }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
             }else{
-                LOG_ERROR("Unrecognized weight name: %s, weights may be incomplete", name.c_str());
+                LOG_ERROR("Unrecognized weight name, weights may be incomplete");
                 continue;
             }
 
@@ -605,15 +887,72 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
             }
             //concat Wq, Wk, Wv
             Tensor Wqkv = concat_qkv(tmp_layer_tensor_q, tmp_layer_tensor_k, tmp_layer_tensor_v);
+            if (Wqkv.data == nullptr) {
+                LOG_ERROR("concat_qkv failed");
+                free(tmp_layer_tensor_q.data);
+                free(tmp_layer_tensor_k.data);
+                free(tmp_layer_tensor_v.data);
+                tmp_layer_tensor_q.data = nullptr;
+                tmp_layer_tensor_k.data = nullptr;
+                tmp_layer_tensor_v.data = nullptr;
+                return ErrorCode::LOAD_ERROR;
+            }
             //transpose
             Tensor Wqkv_trans = Wqkv.transpose();
+            if (Wqkv_trans.data == nullptr) {
+                LOG_ERROR("transpose qkv failed");
+                delete[] static_cast<char*>(Wqkv.data);
+                Wqkv.data = nullptr;
+                free(tmp_layer_tensor_q.data);
+                free(tmp_layer_tensor_k.data);
+                free(tmp_layer_tensor_v.data);
+                tmp_layer_tensor_q.data = nullptr;
+                tmp_layer_tensor_k.data = nullptr;
+                tmp_layer_tensor_v.data = nullptr;
+                return ErrorCode::LOAD_ERROR;
+            }
+            if (Wqkv_trans.size != layer_layout->attention_weights.qkv_proj_weight.size) {
+                std::ostringstream oss;
+                oss << "qkv_proj tensor size mismatch after concat/transpose, src=" << Wqkv_trans.size
+                    << ", dst=" << layer_layout->attention_weights.qkv_proj_weight.size
+                    << ", q_shape=[" << tmp_layer_tensor_q.shape[0] << "," << tmp_layer_tensor_q.shape[1] << "]"
+                    << ", k_shape=[" << tmp_layer_tensor_k.shape[0] << "," << tmp_layer_tensor_k.shape[1] << "]"
+                    << ", v_shape=[" << tmp_layer_tensor_v.shape[0] << "," << tmp_layer_tensor_v.shape[1] << "]"
+                    << ", cfg_layer_id=" << layer_id;
+                LOG_ERROR(oss.str());
+                delete[] static_cast<char*>(Wqkv_trans.data);
+                Wqkv_trans.data = nullptr;
+                delete[] static_cast<char*>(Wqkv.data);
+                Wqkv.data = nullptr;
+                free(tmp_layer_tensor_q.data);
+                free(tmp_layer_tensor_k.data);
+                free(tmp_layer_tensor_v.data);
+                tmp_layer_tensor_q.data = nullptr;
+                tmp_layer_tensor_k.data = nullptr;
+                tmp_layer_tensor_v.data = nullptr;
+                return ErrorCode::INVALID_INPUT;
+            }
             //copy from cpu to gpu
-            cudaMemcpy(
+            cudaError_t copy_err = cudaMemcpy(
                 layer_layout->attention_weights.qkv_proj_weight.data,
                 Wqkv_trans.data,
                 Wqkv_trans.size,
                 cudaMemcpyHostToDevice
             );
+            if (copy_err != cudaSuccess) {
+                LOG_ERROR("cudaMemcpy qkv_proj_weight failed");
+                delete[] static_cast<char*>(Wqkv_trans.data);
+                Wqkv_trans.data = nullptr;
+                delete[] static_cast<char*>(Wqkv.data);
+                Wqkv.data = nullptr;
+                free(tmp_layer_tensor_q.data);
+                free(tmp_layer_tensor_k.data);
+                free(tmp_layer_tensor_v.data);
+                tmp_layer_tensor_q.data = nullptr;
+                tmp_layer_tensor_k.data = nullptr;
+                tmp_layer_tensor_v.data = nullptr;
+                return ErrorCode::CUDA_FAILURE;
+            }
             delete[] static_cast<char*>(Wqkv_trans.data);
             Wqkv_trans.data = nullptr;
             delete[] static_cast<char*>(Wqkv.data);
@@ -643,12 +982,27 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
             }
             if (final_norm_layout) {
-                cudaMemcpy(
+                if (tmp_layer_tensor.size != final_norm_layout->norm_weight.size) {
+                    std::ostringstream oss;
+                    oss << "model.norm tensor size mismatch, src=" << tmp_layer_tensor.size
+                        << ", dst=" << final_norm_layout->norm_weight.size;
+                    LOG_ERROR(oss.str());
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::INVALID_INPUT;
+                }
+                cudaError_t copy_err = cudaMemcpy(
                     final_norm_layout->norm_weight.data,
                     tmp_layer_tensor.data,
                     final_norm_layout->norm_weight.size,
                     cudaMemcpyHostToDevice
                 );
+                if (copy_err != cudaSuccess) {
+                    LOG_ERROR("cudaMemcpy model.norm failed");
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::CUDA_FAILURE;
+                }
             }
             free(tmp_layer_tensor.data);
             tmp_layer_tensor.data = nullptr;
@@ -665,17 +1019,32 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
             }
             if (lm_head_layout) {
-                cudaMemcpy(
+                if (tmp_layer_tensor.size != lm_head_layout->linear_weight.size) {
+                    std::ostringstream oss;
+                    oss << "lm_head tensor size mismatch, src=" << tmp_layer_tensor.size
+                        << ", dst=" << lm_head_layout->linear_weight.size;
+                    LOG_ERROR(oss.str());
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::INVALID_INPUT;
+                }
+                cudaError_t copy_err = cudaMemcpy(
                     lm_head_layout->linear_weight.data,
                     tmp_layer_tensor.data,
                     lm_head_layout->linear_weight.size,
                     cudaMemcpyHostToDevice
                 );
+                if (copy_err != cudaSuccess) {
+                    LOG_ERROR("cudaMemcpy lm_head failed");
+                    free(tmp_layer_tensor.data);
+                    tmp_layer_tensor.data = nullptr;
+                    return ErrorCode::CUDA_FAILURE;
+                }
             }
             free(tmp_layer_tensor.data);
             tmp_layer_tensor.data = nullptr;
         } else {
-            LOG_ERROR("Unrecognized weight name: %s, weights may be incomplete", name.c_str());
+            LOG_ERROR("Unrecognized weight name, weights may be incomplete");
             continue;
         }
         
@@ -690,6 +1059,8 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
     if (tmp_layer_tensor_v.data) {
         free(tmp_layer_tensor_v.data);
     }
+
+    LOG_DEBUG("load_weights finished");
     
     return ErrorCode::SUCCESS;
 }

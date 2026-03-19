@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
-#include <nlohmann/json.hpp>
+#include "include/nlohmann/json.hpp"
 #include <fstream>
 
 using json = nlohmann::json;
@@ -40,6 +40,9 @@ struct MLPLayerConfig : public LayerConfig {
     size_t activation_after_linear_idx = 0;
     std::vector<LinearConfig> mlp_linears;
 };
+struct LayerNormLayerConfig : public LayerConfig {
+    size_t norm_size = 0;
+};
 
 struct TransformerLayerConfig : public LayerConfig {
     AttentionLayerConfig attention_config;
@@ -51,9 +54,7 @@ struct LinearLayerConfig : public LayerConfig {
     LinearConfig linear_config;
 };
 
-struct LayerNormLayerConfig : public LayerConfig {
-    size_t norm_size = 0;
-};
+
 
 class ModelConfig {
 public:
@@ -77,6 +78,7 @@ public:
     size_t num_heads;
     size_t num_kv_heads;
     size_t head_dim;
+    size_t data_type;
     
 
     // Store per-layer configs polymorphically.
