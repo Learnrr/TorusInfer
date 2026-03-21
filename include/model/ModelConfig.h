@@ -1,15 +1,51 @@
 #pragma once
 
 #include <cstddef>
+#include <cctype>
 #include <memory>
 #include <string>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
-#include "include/nlohmann/json.hpp"
+#include "nlohmann/json.hpp"
 #include <fstream>
+#include "define.h" 
+#include "error.h"
+#include "utils/logger.h"
 
 using json = nlohmann::json;
+
+inline DataType ParseDataTypeFromJson(const json& config_json) {
+    const json* dtype_node = nullptr;
+    if (config_json.contains("data_type")) {
+        dtype_node = &config_json["data_type"];
+    } else if (config_json.contains("dtype")) {
+        dtype_node = &config_json["dtype"];
+    }
+
+    if (dtype_node == nullptr) {
+        return DataType::FLOAT16;
+    }
+
+    if (!dtype_node->is_string()) {
+        throw std::invalid_argument("dtype/data_type must be a string");
+    }
+
+    std::string dtype_text = dtype_node->get<std::string>();
+    for (char& ch : dtype_text) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    if (dtype_text == "float32" || dtype_text == "fp32" || dtype_text == "f32") {
+        return DataType::FLOAT32;
+    }
+    if (dtype_text == "float16" || dtype_text == "fp16" || dtype_text == "f16" || dtype_text == "half") {
+        return DataType::FLOAT16;
+    }
+
+    throw std::invalid_argument("unsupported dtype/data_type string: " + dtype_text);
+
+}
 
 
 struct LayerConfig {
@@ -71,14 +107,16 @@ public:
     float temperature = 1.0f;
     float top_p = 1.0f;
     size_t top_k = 50; 
-    std::string model_path;
+    std::string model_path; //path to the model weights, e.g. safetensors file
     size_t eos_token_id;
-    std::string weight_names_path;
-    std::string model_safetensors_index_json;
+    std::string weight_names_path; //path to the weight names txt
+    //path to the json file that maps weight names to safetensors files
+    std::string model_safetensors_index_json; 
     size_t num_heads;
     size_t num_kv_heads;
     size_t head_dim;
-    size_t data_type;
+    DataType data_type;
+    size_t mlp_intermediate_size;
     
 
     // Store per-layer configs polymorphically.
@@ -101,9 +139,17 @@ public:
         return std::dynamic_pointer_cast<T>(layer_configs[idx]);
     }
 
-    void build_from_file(const char* config_path) {
+    ErrorCode build_from_file(const char* config_path) {
         std::ifstream file(config_path);
-        json config_json;
+        if (!file.is_open()) {
+            {
+                std::ostringstream oss;
+                oss << "Failed to open model config file: " << config_path;
+                LOG_ERROR(oss.str());
+            }
+            return ErrorCode::FAILED_TO_OPEN_CONFIG_FILE;
+        }
+        nlohmann::json config_json;
         file >> config_json;
         max_seq_len = config_json.value("max_seq_len", max_seq_len);
         hidden_size = config_json.value("hidden_size", hidden_size);
@@ -117,6 +163,11 @@ public:
         num_heads = config_json.value("num_heads", num_heads);
         num_kv_heads = config_json.value("num_kv_heads", num_kv_heads);
         head_dim = config_json.value("head_dim", head_dim);
+        data_type = ParseDataTypeFromJson(config_json);
+        weight_names_path = config_json.value("weight_names_path", weight_names_path);
+        model_safetensors_index_json = config_json.value("model_safetensors_index_json", model_safetensors_index_json);
+        mlp_intermediate_size = config_json.value("mlp_intermediate_size", mlp_intermediate_size);
+        
 
 
         // Load layer-specific configs
@@ -151,5 +202,6 @@ public:
             }
 
         }
+        return ErrorCode::SUCCESS;
     }
 };

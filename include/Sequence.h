@@ -4,6 +4,7 @@
 #include "define.h"
 #include <mutex>
 #include <condition_variable>
+#include <cstddef>
 
 enum class SequenceState {
     PREPARED,
@@ -18,9 +19,9 @@ class Sequence {
     public:
         size_t seq_id;
         size_t seq_len;
-        vector<size_t> token_ids;
+        std::vector<size_t> token_ids;
         SequenceState state;
-        vector<shared_ptr<CacheBlock>> blocks;
+        std::vector<std::shared_ptr<CacheBlock>> blocks;
         bool finish_handled = false;
 
         std::mutex mtx;

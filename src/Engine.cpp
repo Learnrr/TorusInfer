@@ -11,7 +11,7 @@ void Engine::init(char* llm_engine_config_path) {
     }
 
     workspace = std::make_unique<Workspace>();
-    error = workspace->init();
+    error = workspace->init(engine_config);
     if (error != ErrorCode::SUCCESS) {
         // Handle workspace initialization error
         return;

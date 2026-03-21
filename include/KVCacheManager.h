@@ -13,16 +13,16 @@ class KVCacheManager {
         void* key_cache;
         void* value_cache;
 
-        vector<shared_ptr<CacheBlock>> free_blocks;
-        vector<shared_ptr<CacheBlock>> used_blocks;
+        std::vector<std::shared_ptr<CacheBlock>> free_blocks;
+        std::vector<std::shared_ptr<CacheBlock>> used_blocks;
     public:
         KVCacheManager(){};
 
         ErrorCode init(const LLMEngineConfig& config);
         
-        variant<shared_ptr<CacheBlock>, ErrorCode> get_cache_block(size_t block_id);
+        std::variant<std::shared_ptr<CacheBlock>, ErrorCode> get_cache_block(size_t block_id);
 
-        variant<shared_ptr<CacheBlock>, ErrorCode> allocate_cache_block();
+        std::variant<std::shared_ptr<CacheBlock>, ErrorCode> allocate_cache_block();
 
         ErrorCode free_cache_block(size_t block_id);
 

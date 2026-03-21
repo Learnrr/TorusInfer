@@ -1,4 +1,4 @@
-
+#pragma once
 enum class ErrorCode {
     SUCCESS = 0,
     INVALID_INPUT = 1,
@@ -8,5 +8,6 @@ enum class ErrorCode {
     SEQUENCE_NOT_FOUND = 5,
     UNKNOWN_ERROR = 6,
     LOAD_ERROR = 7,
-    COMPUTE_ERROR = 8
+    COMPUTE_ERROR = 8,
+    FAILED_TO_OPEN_CONFIG_FILE = 9,
 };

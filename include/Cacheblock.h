@@ -1,6 +1,7 @@
 #pragma once
 #include "define.h"
 #include <vector>
+#include <cstddef>
 //[block_size, layers, kv_heads, head_dim]
 class CacheBlock{
     public:
