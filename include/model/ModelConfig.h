@@ -98,7 +98,8 @@ public:
         : max_seq_len(512),
           hidden_size(768),
           num_hidden_layers(12),
-          vocab_size(30522) {}
+                    vocab_size(30522),
+                    data_type(DataType::FLOAT16) {}
 
     size_t max_seq_len;
     size_t hidden_size;

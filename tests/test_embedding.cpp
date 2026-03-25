@@ -30,6 +30,7 @@ ModelConfig BuildTinyConfig() {
     ModelConfig cfg;
     cfg.vocab_size = 5;
     cfg.hidden_size = 4;
+    cfg.data_type = DataType::FLOAT32;
     return cfg;
 }
 
@@ -58,7 +59,7 @@ void TestEmbeddingForwardGathersRows() {
         h_table.size(),
         d_table,
         {cfg.vocab_size, cfg.hidden_size},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 
@@ -75,7 +76,7 @@ void TestEmbeddingForwardGathersRows() {
         output_elems,
         d_output,
         {num_tokens, cfg.hidden_size},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 
@@ -130,7 +131,7 @@ void TestEmbeddingForwardSupportsRepeatedTokens() {
         h_table.size(),
         d_table,
         {cfg.vocab_size, cfg.hidden_size},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
     Embedding embedding(cfg, embedding_weight);
@@ -146,7 +147,7 @@ void TestEmbeddingForwardSupportsRepeatedTokens() {
         output_elems,
         d_output,
         {num_tokens, cfg.hidden_size},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 

@@ -5,10 +5,11 @@ void ResidualAdd::prefill_forward(const Tensor& input, Tensor& output, ForwardCo
     const size_t num_elements = input.numel();
     (void)context;
     launch_residual_add_kernel(
-        static_cast<const float*>(output.data),
-        static_cast<const float*>(input.data),
-        static_cast<float*>(output.data),
-        num_elements
+        output.data,
+        input.data,
+        output.data,
+        num_elements,
+        input.dtype
     );
 }
 

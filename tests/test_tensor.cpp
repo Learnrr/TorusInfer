@@ -5,6 +5,7 @@ nvcc -std=c++17 -O2 -I../include test_tensor.cpp ../kernel/transpose_kernel.cu -
 */
 
 #include "Tensor.h"
+#include "model/ModelConfig.h"
 
 #include <cassert>
 #include <cstdint>
@@ -38,12 +39,15 @@ bool HasCudaDevice() {
 }
 
 void TestViewUpdatesShape() {
+    ModelConfig cfg;
+    cfg.data_type = DataType::FLOAT32;
+
     std::vector<float> storage = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
     Tensor t(
         storage.size(),
         storage.data(),
         {2, 3},
-        DataType::FLOAT32,
+        cfg.data_type,
         "cpu"
     );
 
@@ -54,6 +58,9 @@ void TestViewUpdatesShape() {
 }
 
 void TestTransposeCpuFloat32_2D() {
+    ModelConfig cfg;
+    cfg.data_type = DataType::FLOAT32;
+
     std::vector<float> storage = {
         1.0f, 2.0f, 3.0f,
         4.0f, 5.0f, 6.0f
@@ -62,7 +69,7 @@ void TestTransposeCpuFloat32_2D() {
         storage.size(),
         storage.data(),
         {2, 3},
-        DataType::FLOAT32,
+        cfg.data_type,
         "cpu"
     );
 
@@ -87,6 +94,9 @@ void TestTransposeCpuFloat32_2D() {
 }
 
 void TestTransposeCpuFloat16_3DLast2DimsOnly() {
+    ModelConfig cfg;
+    cfg.data_type = DataType::FLOAT16;
+
     // Shape [2, 2, 3], transpose only last 2 dims -> [2, 3, 2].
     std::vector<uint16_t> storage = {
         // block 0: [ [1,2,3], [4,5,6] ]
@@ -101,7 +111,7 @@ void TestTransposeCpuFloat16_3DLast2DimsOnly() {
         storage.size(),
         storage.data(),
         {2, 2, 3},
-        DataType::FLOAT16,
+        cfg.data_type,
         "cpu"
     );
 
@@ -135,6 +145,9 @@ void TestTransposeCpuFloat16_3DLast2DimsOnly() {
 }
 
 void TestTransposeGpuFloat32_2D() {
+    ModelConfig cfg;
+    cfg.data_type = DataType::FLOAT32;
+
     std::vector<float> host_in = {
         1.0f, 2.0f, 3.0f,
         4.0f, 5.0f, 6.0f
@@ -152,7 +165,7 @@ void TestTransposeGpuFloat32_2D() {
         host_in.size(),
         device_in,
         {2, 3},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 
@@ -180,6 +193,9 @@ void TestTransposeGpuFloat32_2D() {
 }
 
 void TestTransposeGpuFloat16_3DLast2DimsOnly() {
+    ModelConfig cfg;
+    cfg.data_type = DataType::FLOAT16;
+
     std::vector<uint16_t> host_in = {
         1, 2, 3,
         4, 5, 6,
@@ -199,7 +215,7 @@ void TestTransposeGpuFloat16_3DLast2DimsOnly() {
         host_in.size(),
         device_in,
         {2, 2, 3},
-        DataType::FLOAT16,
+        cfg.data_type,
         "gpu"
     );
 

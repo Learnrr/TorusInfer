@@ -99,7 +99,7 @@ std::vector<float> ComputeQwenMlpReference(
     return MatmulCpu(swiglu, num_tokens, inter, w_down, hidden);
 }
 
-MLP BuildMlp(float* d_w_gate, float* d_w_up, float* d_w_down) {
+MLP BuildMlp(float* d_w_gate, float* d_w_up, float* d_w_down, DataType dtype) {
     MLPLayerConfig cfg;
     cfg.intermediate_size = 2;
     cfg.activation_after_linear_idx = 0;
@@ -121,21 +121,21 @@ MLP BuildMlp(float* d_w_gate, float* d_w_up, float* d_w_down) {
     layout.mlp_linears_weight[0].linear_weight.num_elements = 4;
     layout.mlp_linears_weight[0].linear_weight.size = 4 * sizeof(float);
     layout.mlp_linears_weight[0].linear_weight.shape = {2, 2};
-    layout.mlp_linears_weight[0].linear_weight.dtype = DataType::FLOAT32;
+    layout.mlp_linears_weight[0].linear_weight.dtype = dtype;
     layout.mlp_linears_weight[0].linear_weight.device = "gpu";
 
     layout.mlp_linears_weight[1].linear_weight.data = d_w_up;
     layout.mlp_linears_weight[1].linear_weight.num_elements = 4;
     layout.mlp_linears_weight[1].linear_weight.size = 4 * sizeof(float);
     layout.mlp_linears_weight[1].linear_weight.shape = {2, 2};
-    layout.mlp_linears_weight[1].linear_weight.dtype = DataType::FLOAT32;
+    layout.mlp_linears_weight[1].linear_weight.dtype = dtype;
     layout.mlp_linears_weight[1].linear_weight.device = "gpu";
 
     layout.mlp_linears_weight[2].linear_weight.data = d_w_down;
     layout.mlp_linears_weight[2].linear_weight.num_elements = 4;
     layout.mlp_linears_weight[2].linear_weight.size = 4 * sizeof(float);
     layout.mlp_linears_weight[2].linear_weight.shape = {2, 2};
-    layout.mlp_linears_weight[2].linear_weight.dtype = DataType::FLOAT32;
+    layout.mlp_linears_weight[2].linear_weight.dtype = dtype;
     layout.mlp_linears_weight[2].linear_weight.device = "gpu";
 
     return MLP(cfg, layout);
@@ -182,11 +182,13 @@ void RunAndCheckMlp(bool use_prefill) {
     CheckCuda(cudaMemcpy(d_w_down, h_w_down.data(), h_w_down.size() * sizeof(float), cudaMemcpyHostToDevice));
     CheckCuda(cudaMemset(d_output, 0, h_input.size() * sizeof(float)));
 
+    LLMEngineConfig engine_cfg = BuildTinyEngineConfig();
+
     Tensor input(
         h_input.size(),
         d_input,
         {num_tokens, 2},
-        DataType::FLOAT32,
+        engine_cfg.model_config.data_type,
         "gpu"
     );
 
@@ -194,11 +196,10 @@ void RunAndCheckMlp(bool use_prefill) {
         h_input.size(),
         d_output,
         {num_tokens, 2},
-        DataType::FLOAT32,
+        engine_cfg.model_config.data_type,
         "gpu"
     );
 
-    LLMEngineConfig engine_cfg = BuildTinyEngineConfig();
     Workspace workspace;
     ErrorCode ws_err = workspace.init(engine_cfg);
     assert(ws_err == ErrorCode::SUCCESS);
@@ -212,7 +213,7 @@ void RunAndCheckMlp(bool use_prefill) {
     context.workspace = &workspace;
     context.config = &engine_cfg.model_config;
 
-    MLP mlp = BuildMlp(d_w_gate, d_w_up, d_w_down);
+    MLP mlp = BuildMlp(d_w_gate, d_w_up, d_w_down, engine_cfg.model_config.data_type);
 
     if (use_prefill) {
         mlp.prefill_forward(input, output, context);

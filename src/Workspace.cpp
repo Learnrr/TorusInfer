@@ -3,7 +3,7 @@
 ErrorCode Workspace::init(const LLMEngineConfig& engine_config) {
     // Re-init should not leak the previous device buffer.
     free();
-    size_t datatype = engine_config.model_config.data_type == DataType::FLOAT16 ? 2 : 4; // Assuming FLOAT16 is 2 bytes and FLOAT32 is 4 bytes
+    size_t datatype = DataTypeBytes(engine_config.model_config.data_type);
 
     size_t hidden_size = engine_config.model_config.max_seq_len * engine_config.model_config.hidden_size * datatype;
     size_t qkv_size = engine_config.model_config.max_seq_len * 3 * engine_config.model_config.hidden_size * datatype;

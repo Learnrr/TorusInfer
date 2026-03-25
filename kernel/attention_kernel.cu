@@ -1,14 +1,35 @@
-
 #include "cuda_runtime.h"
+#include <cuda_fp16.h>
 #include "attention_kernel.h"
 
+template <typename T>
+__device__ inline float to_float(T v) {
+    return static_cast<float>(v);
+}
+
+template <>
+__device__ inline float to_float<__half>(__half v) {
+    return __half2float(v);
+}
+
+template <typename T>
+__device__ inline T from_float(float v) {
+    return static_cast<T>(v);
+}
+
+template <>
+__device__ inline __half from_float<__half>(float v) {
+    return __float2half(v);
+}
+
+template <typename T>
 __global__ void attention_qk_softmax_Pv_kernel(
-    const float* q,                    // [num_tokens, num_q_heads, head_dim]
-    float** kcache_block_ptrs,         // [num_blocks][block_size, layers, heads, head_dim]
-    float** vcache_block_ptrs,         // [num_blocks][block_size, layers, heads, head_dim]
-    const size_t* block_ids,           // [num_tokens]
-    const size_t* block_offsets,       // [num_tokens]
-    float* attn_output,                // [num_tokens, num_q_heads, head_dim]
+    const T* q,
+    void** kcache_block_ptrs,
+    void** vcache_block_ptrs,
+    const size_t* block_ids,
+    const size_t* block_offsets,
+    T* attn_output,
     int num_tokens,
     int num_layers,
     int num_q_heads,
@@ -23,24 +44,25 @@ __global__ void attention_qk_softmax_Pv_kernel(
     int dim = threadIdx.x;
     if (token >= num_tokens || head >= num_q_heads || dim >= head_dim) return;
 
-    const int group_size = max(1, num_q_heads / max(1, num_kv_heads));
-    const int kv_head = min(num_kv_heads - 1, head / group_size);
+    const int safe_kv_heads = num_kv_heads > 0 ? num_kv_heads : 1;
+    const int group_size = num_q_heads > 0 ? (num_q_heads / safe_kv_heads) : 1;
+    const int safe_group_size = group_size > 0 ? group_size : 1;
+    const int kv_head = (head / safe_group_size) < num_kv_heads ? (head / safe_group_size) : (num_kv_heads - 1);
 
-    extern __shared__ float scores[]; // size: max_seq_len
+    extern __shared__ float scores[];
 
-    // Compute scalar attention scores by reducing dot(q, k_t) over head_dim.
     if (dim == 0) {
         for (int t = 0; t <= token && t < max_seq_len; ++t) {
             size_t off = block_offsets[t];
-            float* k_block = kcache_block_ptrs[t];
+            T* k_block = static_cast<T*>(kcache_block_ptrs[t]);
             float dot = 0.0f;
             for (int d = 0; d < head_dim; ++d) {
                 int q_offset = token * num_q_heads * head_dim + head * head_dim + d;
-                int k_offset = off * num_layers * num_kv_heads * head_dim
+                int k_offset = static_cast<int>(off) * num_layers * num_kv_heads * head_dim
                     + layer_id * num_kv_heads * head_dim
                     + kv_head * head_dim
                     + d;
-                dot += q[q_offset] * k_block[k_offset];
+                dot += to_float<T>(q[q_offset]) * to_float<T>(k_block[k_offset]);
             }
             scores[t] = dot;
         }
@@ -65,25 +87,25 @@ __global__ void attention_qk_softmax_Pv_kernel(
     float out = 0.0f;
     for (int t = 0; t <= token && t < max_seq_len; ++t) {
         size_t off = block_offsets[t];
-        float* v_block = vcache_block_ptrs[t];
-        int v_offset = off * num_layers * num_kv_heads * head_dim
+        T* v_block = static_cast<T*>(vcache_block_ptrs[t]);
+        int v_offset = static_cast<int>(off) * num_layers * num_kv_heads * head_dim
             + layer_id * num_kv_heads * head_dim
             + kv_head * head_dim
             + dim;
-        float v_val = v_block[v_offset];
+        float v_val = to_float<T>(v_block[v_offset]);
         out += scores[t] * v_val;
     }
     int out_offset = token * num_q_heads * head_dim + head * head_dim + dim;
-    attn_output[out_offset] = out;
+    attn_output[out_offset] = from_float<T>(out);
 }
 
 void launch_attention_qk_softmax_pv_kernel(
-    const float* q,
-    float** kcache_block_ptrs,
-    float** vcache_block_ptrs,
+    const void* q,
+    void** kcache_block_ptrs,
+    void** vcache_block_ptrs,
     const size_t* block_ids,
     const size_t* block_offsets,
-    float* attn_output,
+    void* attn_output,
     int num_tokens,
     int num_layers,
     int num_q_heads,
@@ -91,36 +113,57 @@ void launch_attention_qk_softmax_pv_kernel(
     int head_dim,
     int block_size,
     int max_seq_len,
-    int layer_id
+    int layer_id,
+    DataType dtype
 ) {
     dim3 grid(num_tokens, num_q_heads);
     dim3 block(head_dim);
-    attention_qk_softmax_Pv_kernel<<<grid, block, max_seq_len * sizeof(float)>>>(
-        q,
-        kcache_block_ptrs,
-        vcache_block_ptrs,
-        block_ids,
-        block_offsets,
-        attn_output,
-        num_tokens,
-        num_layers,
-        num_q_heads,
-        num_kv_heads,
-        head_dim,
-        block_size,
-        max_seq_len,
-        layer_id
-    );
+    if (dtype == DataType::FLOAT32) {
+        attention_qk_softmax_Pv_kernel<float><<<grid, block, max_seq_len * sizeof(float)>>>(
+            static_cast<const float*>(q),
+            kcache_block_ptrs,
+            vcache_block_ptrs,
+            block_ids,
+            block_offsets,
+            static_cast<float*>(attn_output),
+            num_tokens,
+            num_layers,
+            num_q_heads,
+            num_kv_heads,
+            head_dim,
+            block_size,
+            max_seq_len,
+            layer_id
+        );
+    } else {
+        attention_qk_softmax_Pv_kernel<__half><<<grid, block, max_seq_len * sizeof(float)>>>(
+            static_cast<const __half*>(q),
+            kcache_block_ptrs,
+            vcache_block_ptrs,
+            block_ids,
+            block_offsets,
+            static_cast<__half*>(attn_output),
+            num_tokens,
+            num_layers,
+            num_q_heads,
+            num_kv_heads,
+            head_dim,
+            block_size,
+            max_seq_len,
+            layer_id
+        );
+    }
 }
 
+template <typename T>
 __global__ void attention_qk_softmax_Pv_decode_kernel(
-    const float* q,
-    float** history_kcache_block_ptrs,
-    float** history_vcache_block_ptrs,
+    const T* q,
+    void** history_kcache_block_ptrs,
+    void** history_vcache_block_ptrs,
     const size_t* history_block_offsets,
     const size_t* query_hist_start,
     const size_t* query_hist_len,
-    float* attn_output,
+    T* attn_output,
     int num_queries,
     int total_history_tokens,
     int num_layers,
@@ -136,13 +179,15 @@ __global__ void attention_qk_softmax_Pv_decode_kernel(
     int dim = threadIdx.x;
     if (query_idx >= num_queries || head >= num_q_heads || dim >= head_dim) return;
 
-    const int group_size = max(1, num_q_heads / max(1, num_kv_heads));
-    const int kv_head = min(num_kv_heads - 1, head / group_size);
+    const int safe_kv_heads = num_kv_heads > 0 ? num_kv_heads : 1;
+    const int group_size = num_q_heads > 0 ? (num_q_heads / safe_kv_heads) : 1;
+    const int safe_group_size = group_size > 0 ? group_size : 1;
+    const int kv_head = (head / safe_group_size) < num_kv_heads ? (head / safe_group_size) : (num_kv_heads - 1);
 
     int hist_start = static_cast<int>(query_hist_start[query_idx]);
     int hist_len = static_cast<int>(query_hist_len[query_idx]);
     if (hist_len <= 0) return;
-    hist_len = min(hist_len, max_seq_len);
+    hist_len = hist_len < max_seq_len ? hist_len : max_seq_len;
 
     extern __shared__ float scores[];
 
@@ -154,16 +199,16 @@ __global__ void attention_qk_softmax_Pv_decode_kernel(
                 continue;
             }
             size_t off = history_block_offsets[hist_idx];
-            float* k_block = history_kcache_block_ptrs[hist_idx];
+            T* k_block = static_cast<T*>(history_kcache_block_ptrs[hist_idx]);
 
             float dot = 0.0f;
             for (int d = 0; d < head_dim; ++d) {
                 int q_offset = query_idx * num_q_heads * head_dim + head * head_dim + d;
-                int k_offset = off * num_layers * num_kv_heads * head_dim
+                int k_offset = static_cast<int>(off) * num_layers * num_kv_heads * head_dim
                     + layer_id * num_kv_heads * head_dim
                     + kv_head * head_dim
                     + d;
-                dot += q[q_offset] * k_block[k_offset];
+                dot += to_float<T>(q[q_offset]) * to_float<T>(k_block[k_offset]);
             }
             scores[j] = dot;
         }
@@ -190,26 +235,26 @@ __global__ void attention_qk_softmax_Pv_decode_kernel(
         int hist_idx = hist_start + j;
         if (hist_idx >= total_history_tokens) break;
         size_t off = history_block_offsets[hist_idx];
-        float* v_block = history_vcache_block_ptrs[hist_idx];
-        int v_offset = off * num_layers * num_kv_heads * head_dim
+        T* v_block = static_cast<T*>(history_vcache_block_ptrs[hist_idx]);
+        int v_offset = static_cast<int>(off) * num_layers * num_kv_heads * head_dim
             + layer_id * num_kv_heads * head_dim
             + kv_head * head_dim
             + dim;
-        out += scores[j] * v_block[v_offset];
+        out += scores[j] * to_float<T>(v_block[v_offset]);
     }
 
     int out_offset = query_idx * num_q_heads * head_dim + head * head_dim + dim;
-    attn_output[out_offset] = out;
+    attn_output[out_offset] = from_float<T>(out);
 }
 
 void launch_attention_qk_softmax_pv_kernel_decode(
-    const float* q,
-    float** history_kcache_block_ptrs,
-    float** history_vcache_block_ptrs,
+    const void* q,
+    void** history_kcache_block_ptrs,
+    void** history_vcache_block_ptrs,
     const size_t* history_block_offsets,
     const size_t* query_hist_start,
     const size_t* query_hist_len,
-    float* attn_output,
+    void* attn_output,
     int num_queries,
     int total_history_tokens,
     int num_layers,
@@ -218,26 +263,48 @@ void launch_attention_qk_softmax_pv_kernel_decode(
     int head_dim,
     int block_size,
     int max_seq_len,
-    int layer_id
+    int layer_id,
+    DataType dtype
 ) {
     dim3 grid(num_queries, num_q_heads);
     dim3 block(head_dim);
-    attention_qk_softmax_Pv_decode_kernel<<<grid, block, max_seq_len * sizeof(float)>>>(
-        q,
-        history_kcache_block_ptrs,
-        history_vcache_block_ptrs,
-        history_block_offsets,
-        query_hist_start,
-        query_hist_len,
-        attn_output,
-        num_queries,
-        total_history_tokens,
-        num_layers,
-        num_q_heads,
-        num_kv_heads,
-        head_dim,
-        block_size,
-        max_seq_len,
-        layer_id
-    );
+    if (dtype == DataType::FLOAT32) {
+        attention_qk_softmax_Pv_decode_kernel<float><<<grid, block, max_seq_len * sizeof(float)>>>(
+            static_cast<const float*>(q),
+            history_kcache_block_ptrs,
+            history_vcache_block_ptrs,
+            history_block_offsets,
+            query_hist_start,
+            query_hist_len,
+            static_cast<float*>(attn_output),
+            num_queries,
+            total_history_tokens,
+            num_layers,
+            num_q_heads,
+            num_kv_heads,
+            head_dim,
+            block_size,
+            max_seq_len,
+            layer_id
+        );
+    } else {
+        attention_qk_softmax_Pv_decode_kernel<__half><<<grid, block, max_seq_len * sizeof(float)>>>(
+            static_cast<const __half*>(q),
+            history_kcache_block_ptrs,
+            history_vcache_block_ptrs,
+            history_block_offsets,
+            query_hist_start,
+            query_hist_len,
+            static_cast<__half*>(attn_output),
+            num_queries,
+            total_history_tokens,
+            num_layers,
+            num_q_heads,
+            num_kv_heads,
+            head_dim,
+            block_size,
+            max_seq_len,
+            layer_id
+        );
+    }
 }

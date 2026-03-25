@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include "define.h"
 
 void launch_projection_kernel(
     const void* input,
@@ -10,5 +11,6 @@ void launch_projection_kernel(
     size_t batch_seq_len,
     size_t num_attention_heads,
     size_t num_kv_heads,
-    size_t head_dim
+    size_t head_dim,
+    DataType dtype
 );

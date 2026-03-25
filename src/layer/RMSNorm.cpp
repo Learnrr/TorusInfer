@@ -16,17 +16,17 @@ void RMSNorm::prefill_forward(const Tensor& input, Tensor& output, ForwardContex
 
 	size_t num_tokens = context.batch->num_tokens;
 
-	const float* gamma_ptr = 
-	static_cast<const float*>(gamma != nullptr ? gamma : norm_weight.data);
+	const void* gamma_ptr = (gamma != nullptr ? gamma : norm_weight.data);
 	
 
 	launch_rmsnorm_kernel(
-		static_cast<const float*>(input.data),
+		input.data,
 		gamma_ptr,
-		static_cast<float*>(output.data),
+		output.data,
 		num_tokens,
 		hidden_size,
-		kDefaultEps
+		kDefaultEps,
+		input.dtype
 	);
 }
 
@@ -44,16 +44,16 @@ void RMSNorm::decode_forward(const Tensor& input, Tensor& output, ForwardContext
 
 	size_t num_tokens = context.batch->num_tokens;
 
-	const float* gamma_ptr = 
-		static_cast<const float*>(gamma != nullptr ? gamma : norm_weight.data);
+	const void* gamma_ptr = (gamma != nullptr ? gamma : norm_weight.data);
 	
 
 	launch_rmsnorm_kernel(
-		static_cast<const float*>(input.data),
+		input.data,
 		gamma_ptr,
-		static_cast<float*>(output.data),
+		output.data,
 		num_tokens,
 		hidden_size,
-		kDefaultEps
+		kDefaultEps,
+		input.dtype
 	);
 }

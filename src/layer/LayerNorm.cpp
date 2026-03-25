@@ -13,15 +13,16 @@ void LayerNorm::prefill_forward(const Tensor& input, Tensor& output, ForwardCont
 
 	const size_t num_tokens = context.batch->num_tokens;
 
-	const float* gamma_ptr = static_cast<const float*>(gamma != nullptr ? gamma : norm_weight.data);
+	const void* gamma_ptr = (gamma != nullptr ? gamma : norm_weight.data);
 
 	launch_layernorm_kernel(
-		static_cast<const float*>(input.data),
+		input.data,
 		gamma_ptr,
-		static_cast<float*>(output.data),
+		output.data,
 		num_tokens,
 		hidden_size,
-		kDefaultEps
+		kDefaultEps,
+		input.dtype
 	);
 }
 
@@ -36,14 +37,15 @@ void LayerNorm::decode_forward(const Tensor& input, Tensor& output, ForwardConte
 
 	const size_t num_tokens = context.batch->num_tokens;
 
-	const float* gamma_ptr = static_cast<const float*>(gamma != nullptr ? gamma : norm_weight.data);
+	const void* gamma_ptr = (gamma != nullptr ? gamma : norm_weight.data);
 
 	launch_layernorm_kernel(
-		static_cast<const float*>(input.data),
+		input.data,
 		gamma_ptr,
-		static_cast<float*>(output.data),
+		output.data,
 		num_tokens,
 		hidden_size,
-		kDefaultEps
+		kDefaultEps,
+		input.dtype
 	);
 }

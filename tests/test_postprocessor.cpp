@@ -20,6 +20,7 @@ ModelConfig BuildConfig(size_t vocab_size, float temperature, size_t top_k, floa
     cfg.temperature = temperature;
     cfg.top_k = top_k;
     cfg.top_p = top_p;
+    cfg.data_type = DataType::FLOAT32;
     return cfg;
 }
 
@@ -37,7 +38,7 @@ void TestProcessSkipsNullBatch() {
     PostProcessor post_processor(cfg);
 
     std::vector<float> logits = {0.1f, 0.2f, 0.9f, 0.3f, 0.0f};
-    Tensor input(logits.size(), logits.data(), {1, logits.size()}, DataType::FLOAT32, "cpu");
+    Tensor input(logits.size(), logits.data(), {1, logits.size()}, cfg.data_type, "cpu");
 
     ForwardContext ctx = BuildContext(nullptr);
     post_processor.process(input, ctx);
@@ -51,7 +52,7 @@ void TestProcessTopK1PicksArgmaxPerSequence() {
         0.1f, 0.2f, 0.9f, 0.3f, 0.0f,
         -1.0f, 4.0f, 3.0f, 2.0f, 1.0f
     };
-    Tensor input(logits.size(), logits.data(), {2, cfg.vocab_size}, DataType::FLOAT32, "cpu");
+    Tensor input(logits.size(), logits.data(), {2, cfg.vocab_size}, cfg.data_type, "cpu");
 
     Batch batch{};
     batch.batch_size = 2;
@@ -69,7 +70,7 @@ void TestTemperatureZeroStillProducesValidSampling() {
     PostProcessor post_processor(cfg);
 
     std::vector<float> logits = {1.0f, 5.0f, 4.0f, -2.0f};
-    Tensor input(logits.size(), logits.data(), {1, cfg.vocab_size}, DataType::FLOAT32, "cpu");
+    Tensor input(logits.size(), logits.data(), {1, cfg.vocab_size}, cfg.data_type, "cpu");
 
     Batch batch{};
     batch.batch_size = 1;

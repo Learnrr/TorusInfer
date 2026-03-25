@@ -8,7 +8,7 @@ ErrorCode KVCacheManager::init(const LLMEngineConfig& config) {
     * config.model_config.num_hidden_layers 
     * config.model_config.head_dim 
     * config.model_config.num_kv_heads 
-    * (config.model_config.data_type == DataType::FLOAT16 ? 2 : 4);
+    * DataTypeBytes(config.model_config.data_type);
     
     {
         std::ostringstream oss;
@@ -18,7 +18,7 @@ ErrorCode KVCacheManager::init(const LLMEngineConfig& config) {
             << ", num_hidden_layers: " << config.model_config.num_hidden_layers
             << ", head_dim: " << config.model_config.head_dim
             << ", num_kv_heads: " << config.model_config.num_kv_heads
-            << ", data_type: " << (config.model_config.data_type == DataType::FLOAT16 ? "FLOAT16" : "FLOAT32") 
+            << ", data_type: " << DataTypeName(config.model_config.data_type)
             << ")";
         LOG_INFO(oss.str());
     }

@@ -76,13 +76,14 @@ __global__ void apply_rope_inplace_half_kernel(
     tensor[odd_idx] = __float2half(x0 * s + x1 * c);
 }
 
-void launch_apply_rope_inplace_float(
-    float* tensor,
+void launch_apply_rope_inplace(
+    void* tensor,
     const size_t* positions,
     size_t num_tokens,
     size_t num_heads,
     size_t head_dim,
-    float rope_theta
+    float rope_theta,
+    DataType dtype
 ) {
     if (head_dim == 0 || (head_dim % 2) != 0) {
         return;
@@ -90,36 +91,24 @@ void launch_apply_rope_inplace_float(
     constexpr int threads = 256;
     const size_t total = num_tokens * num_heads * (head_dim / 2);
     const int blocks = static_cast<int>((total + threads - 1) / threads);
-    apply_rope_inplace_float_kernel<<<blocks, threads>>>(
-        tensor,
-        positions,
-        static_cast<int>(num_tokens),
-        static_cast<int>(num_heads),
-        static_cast<int>(head_dim),
-        rope_theta
-    );
-}
 
-void launch_apply_rope_inplace_half(
-    uint16_t* tensor,
-    const size_t* positions,
-    size_t num_tokens,
-    size_t num_heads,
-    size_t head_dim,
-    float rope_theta
-) {
-    if (head_dim == 0 || (head_dim % 2) != 0) {
-        return;
+    if (dtype == DataType::FLOAT32) {
+        apply_rope_inplace_float_kernel<<<blocks, threads>>>(
+            static_cast<float*>(tensor),
+            positions,
+            static_cast<int>(num_tokens),
+            static_cast<int>(num_heads),
+            static_cast<int>(head_dim),
+            rope_theta
+        );
+    } else {
+        apply_rope_inplace_half_kernel<<<blocks, threads>>>(
+            static_cast<uint16_t*>(tensor),
+            positions,
+            static_cast<int>(num_tokens),
+            static_cast<int>(num_heads),
+            static_cast<int>(head_dim),
+            rope_theta
+        );
     }
-    constexpr int threads = 256;
-    const size_t total = num_tokens * num_heads * (head_dim / 2);
-    const int blocks = static_cast<int>((total + threads - 1) / threads);
-    apply_rope_inplace_half_kernel<<<blocks, threads>>>(
-        tensor,
-        positions,
-        static_cast<int>(num_tokens),
-        static_cast<int>(num_heads),
-        static_cast<int>(head_dim),
-        rope_theta
-    );
 }

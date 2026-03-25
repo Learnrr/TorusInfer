@@ -9,6 +9,7 @@ nvcc -std=c++17 -O2 -I../include -I../include/layer -I../include/layer/activatio
 #include "layer/activation/SwiGLU.h"
 #include "Batch.h"
 #include "ForwardContext.h"
+#include "model/ModelConfig.h"
 
 #include <cassert>
 #include <cmath>
@@ -51,6 +52,9 @@ std::vector<float> ComputeSwiGluReference(
 }
 
 void RunAndCheckSwiGlu() {
+    ModelConfig cfg;
+    cfg.data_type = DataType::FLOAT32;
+
     const size_t num_tokens = 2;
     const size_t hidden_size = 3;
 
@@ -79,7 +83,7 @@ void RunAndCheckSwiGlu() {
         h_gate.size(),
         d_gate,
         {num_tokens, hidden_size},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 
@@ -87,7 +91,7 @@ void RunAndCheckSwiGlu() {
         h_up.size(),
         d_up,
         {num_tokens, hidden_size},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 
@@ -95,7 +99,7 @@ void RunAndCheckSwiGlu() {
         num_tokens * hidden_size,
         d_output,
         {num_tokens, hidden_size},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 

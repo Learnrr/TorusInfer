@@ -5,23 +5,25 @@
 void Linear::prefill_forward(const Tensor& input, Tensor& output, ForwardContext& context) {
     size_t batch_seq_len = context.batch->num_tokens;
     launch_mlp_linear_kernel(
-        static_cast<const float*>(input.data),
-        static_cast<const float*>(linear_layout.linear_weight.data),
-        static_cast<float*>(output.data),
+        input.data,
+        linear_layout.linear_weight.data,
+        output.data,
         batch_seq_len,
         config.in_features,
-        config.out_features
+        config.out_features,
+        input.dtype
     );
 }
 
 void Linear::decode_forward(const Tensor& input, Tensor& output, ForwardContext& context) {
     size_t batch_seq_len = context.batch->num_tokens;
     launch_mlp_linear_kernel(
-        static_cast<const float*>(input.data),
-        static_cast<const float*>(linear_layout.linear_weight.data),
-        static_cast<float*>(output.data),
+        input.data,
+        linear_layout.linear_weight.data,
+        output.data,
         batch_seq_len,
         config.in_features,
-        config.out_features
+        config.out_features,
+        input.dtype
     );
 }

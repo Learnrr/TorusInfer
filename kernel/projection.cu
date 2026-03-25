@@ -1,6 +1,28 @@
 #include "cuda_runtime.h"
+#include <cuda_fp16.h>
 #include "projection_kernel.h"
 
+template <typename T>
+__device__ inline float to_float(T v) {
+    return static_cast<float>(v);
+}
+
+template <>
+__device__ inline float to_float<__half>(__half v) {
+    return __half2float(v);
+}
+
+template <typename T>
+__device__ inline T from_float(float v) {
+    return static_cast<T>(v);
+}
+
+template <>
+__device__ inline __half from_float<__half>(float v) {
+    return __float2half(v);
+}
+
+template <typename T>
 __global__ void projection_kernel(
     const void* input, 
     const void* weight, 
@@ -23,9 +45,12 @@ __global__ void projection_kernel(
     if (out_col >= out_features) return;
 
     float sum = 0.0f;
+    const T* in_ptr = static_cast<const T*>(input);
+    const T* w_ptr = static_cast<const T*>(weight);
+    T* out_ptr = static_cast<T*>(output);
     for (int in_d = 0; in_d < in_features; ++in_d) {
-        const float in_val = ((float*)input)[token * in_features + in_d];
-        const float w_val = ((float*)weight)[in_d * out_features + out_col];
+        const float in_val = to_float<T>(in_ptr[token * in_features + in_d]);
+        const float w_val = to_float<T>(w_ptr[in_d * out_features + out_col]);
         sum += in_val * w_val;
     }
 
@@ -38,7 +63,7 @@ __global__ void projection_kernel(
     } else {
         dst_idx = static_cast<int>(batch_seq_len) * (q_size + k_size) + token * v_size + (out_col - q_size - k_size);
     }
-    ((float*)output)[dst_idx] = sum;
+    out_ptr[dst_idx] = from_float<T>(sum);
 
 }
 
@@ -50,19 +75,33 @@ void launch_projection_kernel(
     size_t batch_seq_len,
     size_t num_attention_heads,
     size_t num_kv_heads,
-    size_t head_dim
+    size_t head_dim,
+    DataType dtype
 ) {
     size_t out_features = (num_attention_heads + 2 * num_kv_heads) * head_dim;
     dim3 grid(batch_seq_len, out_features);
     dim3 block(1);
-    projection_kernel<<<grid, block>>>(
-        input,
-        weight,
-        bias,
-        output,
-        batch_seq_len,
-        num_attention_heads,
-        num_kv_heads,
-        head_dim
-    );
+    if (dtype == DataType::FLOAT32) {
+        projection_kernel<float><<<grid, block>>>(
+            input,
+            weight,
+            bias,
+            output,
+            batch_seq_len,
+            num_attention_heads,
+            num_kv_heads,
+            head_dim
+        );
+    } else {
+        projection_kernel<__half><<<grid, block>>>(
+            input,
+            weight,
+            bias,
+            output,
+            batch_seq_len,
+            num_attention_heads,
+            num_kv_heads,
+            head_dim
+        );
+    }
 }

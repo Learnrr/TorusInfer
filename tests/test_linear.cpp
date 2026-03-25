@@ -7,6 +7,7 @@ nvcc -std=c++17 -O2 -I../include -I../include/layer -I../include/model -I../incl
 */
 
 #include "layer/Linear.h"
+#include "model/ModelConfig.h"
 
 #include <cassert>
 #include <cmath>
@@ -39,6 +40,9 @@ Linear BuildLinearLayer(Tensor& weight) {
 }
 
 void RunAndCheckLinear(bool use_prefill) {
+    ModelConfig cfg;
+    cfg.data_type = DataType::FLOAT32;
+
     // Input shape [2, 3].
     const std::vector<float> h_input = {
         1.0f, 2.0f, 3.0f,
@@ -69,7 +73,7 @@ void RunAndCheckLinear(bool use_prefill) {
         h_input.size(),
         d_input,
         {2, 3},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 
@@ -77,7 +81,7 @@ void RunAndCheckLinear(bool use_prefill) {
         h_weight.size(),
         d_weight,
         {3, 2},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 
@@ -85,7 +89,7 @@ void RunAndCheckLinear(bool use_prefill) {
         4,
         d_output,
         {2, 2},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 

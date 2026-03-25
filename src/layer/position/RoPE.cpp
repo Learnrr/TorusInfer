@@ -44,45 +44,25 @@ void RoPE::apply(
 		return;
 	}
 
-	if (q.dtype == DataType::FLOAT32) {
-		launch_apply_rope_inplace_float(
-			static_cast<float*>(q.data),
-			d_positions,
-			num_tokens,
-			num_q_heads,
-			head_dim,
-			rope_theta
-		);
-	} else if (q.dtype == DataType::FLOAT16) {
-		launch_apply_rope_inplace_half(
-			static_cast<uint16_t*>(q.data),
-			d_positions,
-			num_tokens,
-			num_q_heads,
-			head_dim,
-			rope_theta
-		);
-	}
+	launch_apply_rope_inplace(
+		q.data,
+		d_positions,
+		num_tokens,
+		num_q_heads,
+		head_dim,
+		rope_theta,
+		q.dtype
+	);
 
-	if (k.dtype == DataType::FLOAT32) {
-		launch_apply_rope_inplace_float(
-			static_cast<float*>(k.data),
-			d_positions,
-			num_tokens,
-			num_kv_heads,
-			head_dim,
-			rope_theta
-		);
-	} else if (k.dtype == DataType::FLOAT16) {
-		launch_apply_rope_inplace_half(
-			static_cast<uint16_t*>(k.data),
-			d_positions,
-			num_tokens,
-			num_kv_heads,
-			head_dim,
-			rope_theta
-		);
-	}
+	launch_apply_rope_inplace(
+		k.data,
+		d_positions,
+		num_tokens,
+		num_kv_heads,
+		head_dim,
+		rope_theta,
+		k.dtype
+	);
 
 	cudaFree(d_positions);
 }

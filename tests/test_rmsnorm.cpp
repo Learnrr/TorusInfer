@@ -7,6 +7,7 @@ nvcc -std=c++17 -O2 -I../include -I../include/layer -I../include/model -I../incl
 */
 
 #include "layer/RMSNorm.h"
+#include "model/ModelConfig.h"
 
 #include <cassert>
 #include <cmath>
@@ -57,6 +58,9 @@ std::vector<float> ComputeRmsNormReference(
 }
 
 void RunAndCheckRmsNorm(bool use_prefill) {
+    ModelConfig cfg_dtype;
+    cfg_dtype.data_type = DataType::FLOAT32;
+
     const size_t num_tokens = 2;
     const size_t hidden_size = 4;
 
@@ -84,7 +88,7 @@ void RunAndCheckRmsNorm(bool use_prefill) {
         h_input.size(),
         d_input,
         {num_tokens, hidden_size},
-        DataType::FLOAT32,
+        cfg_dtype.data_type,
         "gpu"
     );
 
@@ -92,7 +96,7 @@ void RunAndCheckRmsNorm(bool use_prefill) {
         h_input.size(),
         d_output,
         {num_tokens, hidden_size},
-        DataType::FLOAT32,
+        cfg_dtype.data_type,
         "gpu"
     );
 
@@ -103,7 +107,7 @@ void RunAndCheckRmsNorm(bool use_prefill) {
         h_gamma.size(),
         d_gamma,
         {hidden_size},
-        DataType::FLOAT32,
+        cfg_dtype.data_type,
         "gpu"
     );
 

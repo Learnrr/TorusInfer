@@ -7,6 +7,7 @@ nvcc -std=c++17 -O2 -I../include -I../include/layer -I../include/model -I../incl
 */
 
 #include "layer/ResidualAdd.h"
+#include "model/ModelConfig.h"
 
 #include <cassert>
 #include <cmath>
@@ -32,6 +33,9 @@ bool AlmostEqual(float a, float b, float eps = 1e-6f) {
 }
 
 void RunAndCheckResidualAdd(bool use_prefill) {
+    ModelConfig cfg;
+    cfg.data_type = DataType::FLOAT32;
+
     // input and residual (stored in output) both shape [2, 3].
     const std::vector<float> h_input = {
         1.0f, 2.0f, 3.0f,
@@ -55,7 +59,7 @@ void RunAndCheckResidualAdd(bool use_prefill) {
         h_input.size(),
         d_input,
         {2, 3},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 
@@ -63,7 +67,7 @@ void RunAndCheckResidualAdd(bool use_prefill) {
         h_residual.size(),
         d_output,
         {2, 3},
-        DataType::FLOAT32,
+        cfg.data_type,
         "gpu"
     );
 

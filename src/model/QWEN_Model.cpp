@@ -97,7 +97,7 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
         batch.num_tokens * config.hidden_size, 
         workspace.get_embedding_workspace(),
         {batch.num_tokens, config.hidden_size}, 
-        DataType::FLOAT32
+        config.data_type
     );
 
 
@@ -107,7 +107,7 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
         batch.num_tokens * config.hidden_size, 
         workspace.get_hidden2_workspace(),
         {batch.num_tokens, config.hidden_size}, 
-        DataType::FLOAT32
+        config.data_type
     );
 
     ForwardContext context;
@@ -125,7 +125,7 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
         batch.num_tokens * config.vocab_size, 
         workspace.get_logits_workspace(),
         {batch.num_tokens, config.vocab_size}, 
-        DataType::FLOAT32
+        config.data_type
     );
     
 
@@ -146,7 +146,7 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         batch.num_tokens * config.hidden_size, 
         workspace.get_embedding_workspace(),
         {batch.num_tokens, config.hidden_size}, 
-        DataType::FLOAT32
+        config.data_type
     );
     embedding->forward(batch.token_ids, hidden, batch.num_tokens);
 
@@ -154,7 +154,7 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         batch.num_tokens * config.hidden_size, 
         workspace.get_hidden2_workspace(),
         {batch.num_tokens, config.hidden_size}, 
-        DataType::FLOAT32
+        config.data_type
     );
     ForwardContext context;
     context.batch = &batch;
@@ -170,7 +170,7 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         batch.num_tokens * config.vocab_size, 
         workspace.get_logits_workspace(),
         {batch.num_tokens, config.vocab_size}, 
-        DataType::FLOAT32
+        config.data_type
     );
 
     layers[config.num_hidden_layers]->decode_forward(hidden, hidden, context);

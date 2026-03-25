@@ -141,14 +141,14 @@ void TestAttentionPrefillForwardWritesCacheAndOutput() {
     attn_layout.qkv_proj_weight.num_elements = h_qkv_weight.size();
     attn_layout.qkv_proj_weight.size = h_qkv_weight.size() * sizeof(float);
     attn_layout.qkv_proj_weight.shape = {4, 12};
-    attn_layout.qkv_proj_weight.dtype = DataType::FLOAT32;
+    attn_layout.qkv_proj_weight.dtype = engine_cfg.model_config.data_type;
     attn_layout.qkv_proj_weight.device = "gpu";
 
     attn_layout.o_proj_weight.data = d_o_weight;
     attn_layout.o_proj_weight.num_elements = h_o_weight.size();
     attn_layout.o_proj_weight.size = h_o_weight.size() * sizeof(float);
     attn_layout.o_proj_weight.shape = {4, 4};
-    attn_layout.o_proj_weight.dtype = DataType::FLOAT32;
+    attn_layout.o_proj_weight.dtype = engine_cfg.model_config.data_type;
     attn_layout.o_proj_weight.device = "gpu";
 
     Attention attention(attn_cfg, attn_layout);
@@ -158,14 +158,14 @@ void TestAttentionPrefillForwardWritesCacheAndOutput() {
     input.num_elements = h_input.size();
     input.size = h_input.size() * sizeof(float);
     input.shape = {1, 4};
-    input.dtype = DataType::FLOAT32;
+    input.dtype = engine_cfg.model_config.data_type;
     input.device = "gpu";
 
     Tensor output;
     output.data = workspace.get_attn_output_workspace();
     output.size = 4 * sizeof(float);
     output.shape = {1, 4};
-    output.dtype = DataType::FLOAT32;
+    output.dtype = engine_cfg.model_config.data_type;
     output.device = "gpu";
     output.num_elements = 4;
     CheckCuda(cudaMemset(output.data, 0, output.size));
@@ -278,14 +278,14 @@ void TestAttentionDecodeForwardWritesCacheAndOutput() {
     attn_layout.qkv_proj_weight.num_elements = h_qkv_weight.size();
     attn_layout.qkv_proj_weight.size = h_qkv_weight.size() * sizeof(float);
     attn_layout.qkv_proj_weight.shape = {4, 12};
-    attn_layout.qkv_proj_weight.dtype = DataType::FLOAT32;
+    attn_layout.qkv_proj_weight.dtype = engine_cfg.model_config.data_type;
     attn_layout.qkv_proj_weight.device = "gpu";
 
     attn_layout.o_proj_weight.data = d_o_weight;
     attn_layout.o_proj_weight.num_elements = h_o_weight.size();
     attn_layout.o_proj_weight.size = h_o_weight.size() * sizeof(float);
     attn_layout.o_proj_weight.shape = {4, 4};
-    attn_layout.o_proj_weight.dtype = DataType::FLOAT32;
+    attn_layout.o_proj_weight.dtype = engine_cfg.model_config.data_type;
     attn_layout.o_proj_weight.device = "gpu";
 
     Attention attention(attn_cfg, attn_layout);
@@ -295,14 +295,14 @@ void TestAttentionDecodeForwardWritesCacheAndOutput() {
     input.num_elements = h_input.size();
     input.size = h_input.size() * sizeof(float);
     input.shape = {1, 4};
-    input.dtype = DataType::FLOAT32;
+    input.dtype = engine_cfg.model_config.data_type;
     input.device = "gpu";
 
     Tensor output;
     output.data = workspace.get_attn_output_workspace();
     output.size = 4 * sizeof(float);
     output.shape = {1, 4};
-    output.dtype = DataType::FLOAT32;
+    output.dtype = engine_cfg.model_config.data_type;
     output.device = "gpu";
     output.num_elements = 4;
     CheckCuda(cudaMemset(output.data, 0, output.size));
@@ -418,14 +418,14 @@ void TestAttentionMultiTokenPrefillAndDecode() {
     attn_layout.qkv_proj_weight.num_elements = h_qkv_weight.size();
     attn_layout.qkv_proj_weight.size = h_qkv_weight.size() * sizeof(float);
     attn_layout.qkv_proj_weight.shape = {4, 12};
-    attn_layout.qkv_proj_weight.dtype = DataType::FLOAT32;
+    attn_layout.qkv_proj_weight.dtype = engine_cfg.model_config.data_type;
     attn_layout.qkv_proj_weight.device = "gpu";
 
     attn_layout.o_proj_weight.data = d_o_weight;
     attn_layout.o_proj_weight.num_elements = h_o_weight.size();
     attn_layout.o_proj_weight.size = h_o_weight.size() * sizeof(float);
     attn_layout.o_proj_weight.shape = {4, 4};
-    attn_layout.o_proj_weight.dtype = DataType::FLOAT32;
+    attn_layout.o_proj_weight.dtype = engine_cfg.model_config.data_type;
     attn_layout.o_proj_weight.device = "gpu";
 
     Attention attention(attn_cfg, attn_layout);
@@ -436,14 +436,14 @@ void TestAttentionMultiTokenPrefillAndDecode() {
     input.num_elements = h_input.size();
     input.size = h_input.size() * sizeof(float);
     input.shape = {2, 4};
-    input.dtype = DataType::FLOAT32;
+    input.dtype = engine_cfg.model_config.data_type;
     input.device = "gpu";
 
     Tensor output;
     output.data = workspace.get_attn_output_workspace();
     output.size = 2 * 4 * sizeof(float);
     output.shape = {2, 4};
-    output.dtype = DataType::FLOAT32;
+    output.dtype = engine_cfg.model_config.data_type;
     output.device = "gpu";
     output.num_elements = 8;
     CheckCuda(cudaMemset(output.data, 0, output.size));
@@ -500,14 +500,14 @@ void TestAttentionMultiTokenPrefillAndDecode() {
     input2.num_elements = 4;
     input2.size = 4 * sizeof(float);
     input2.shape = {1, 4};
-    input2.dtype = DataType::FLOAT32;
+    input2.dtype = engine_cfg.model_config.data_type;
     input2.device = "gpu";
 
     Tensor output2;
     output2.data = workspace.get_attn_output_workspace();
     output2.size = 4 * sizeof(float);
     output2.shape = {1, 4};
-    output2.dtype = DataType::FLOAT32;
+    output2.dtype = engine_cfg.model_config.data_type;
     output2.device = "gpu";
     output2.num_elements = 4;
     CheckCuda(cudaMemset(output2.data, 0, output2.size));

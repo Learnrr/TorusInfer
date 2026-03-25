@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cstddef>
+#include "define.h"
 
 void launch_rmsnorm_kernel(
-    const float* input,
-    const float* gamma,
-    float* output,
+    const void* input,
+    const void* gamma,
+    void* output,
     size_t num_tokens,
     size_t hidden_size,
-    float eps
+    float eps,
+    DataType dtype
 );

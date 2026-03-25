@@ -16,16 +16,12 @@ nvcc -std=c++17 -O2 -I../include -I../include/model test_kvcache_manager.cpp \
 
 namespace {
 
-size_t DTypeBytes(DataType dtype) {
-    return dtype == DataType::FLOAT16 ? 2 : 4;
-}
-
 size_t ComputeBytesPerBlock(const LLMEngineConfig& config) {
     return config.block_size
         * config.model_config.num_hidden_layers
         * config.model_config.head_dim
         * config.model_config.num_kv_heads
-        * DTypeBytes(config.model_config.data_type);
+        * DataTypeBytes(config.model_config.data_type);
 }
 
 LLMEngineConfig BuildDefaultEngineConfig() {

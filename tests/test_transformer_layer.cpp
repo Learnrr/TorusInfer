@@ -57,10 +57,10 @@ LLMEngineConfig BuildTinyEngineConfig() {
     return cfg;
 }
 
-void FillWeightTensor(Tensor& t, float* ptr, const std::vector<size_t>& shape) {
+void FillWeightTensor(Tensor& t, float* ptr, const std::vector<size_t>& shape, DataType dtype) {
     t.data = ptr;
     t.shape = shape;
-    t.dtype = DataType::FLOAT32;
+    t.dtype = dtype;
     t.device = "gpu";
 
     size_t elems = 1;
@@ -96,6 +96,7 @@ std::shared_ptr<TransformerLayerConfig> BuildTransformerConfig() {
 }
 
 std::shared_ptr<TransformerLayerWeightLayout> BuildTransformerWeights(
+    DataType dtype,
     float* d_qkv_weight,
     float* d_o_weight,
     float* d_norm1_gamma,
@@ -106,19 +107,19 @@ std::shared_ptr<TransformerLayerWeightLayout> BuildTransformerWeights(
 ) {
     auto layout = std::make_shared<TransformerLayerWeightLayout>();
 
-    FillWeightTensor(layout->attention_weights.qkv_proj_weight, d_qkv_weight, {4, 12});
-    FillWeightTensor(layout->attention_weights.o_proj_weight, d_o_weight, {4, 4});
+    FillWeightTensor(layout->attention_weights.qkv_proj_weight, d_qkv_weight, {4, 12}, dtype);
+    FillWeightTensor(layout->attention_weights.o_proj_weight, d_o_weight, {4, 4}, dtype);
 
     layout->norm_weights.resize(2);
-    FillWeightTensor(layout->norm_weights[0].norm_weight, d_norm1_gamma, {4});
+    FillWeightTensor(layout->norm_weights[0].norm_weight, d_norm1_gamma, {4}, dtype);
     layout->norm_weights[0].gamma = d_norm1_gamma;
-    FillWeightTensor(layout->norm_weights[1].norm_weight, d_norm2_gamma, {4});
+    FillWeightTensor(layout->norm_weights[1].norm_weight, d_norm2_gamma, {4}, dtype);
     layout->norm_weights[1].gamma = d_norm2_gamma;
 
     layout->mlp_weights.mlp_linears_weight.resize(3);
-    FillWeightTensor(layout->mlp_weights.mlp_linears_weight[0].linear_weight, d_mlp_gate_weight, {4, 4});
-    FillWeightTensor(layout->mlp_weights.mlp_linears_weight[1].linear_weight, d_mlp_up_weight, {4, 4});
-    FillWeightTensor(layout->mlp_weights.mlp_linears_weight[2].linear_weight, d_mlp_down_weight, {4, 4});
+    FillWeightTensor(layout->mlp_weights.mlp_linears_weight[0].linear_weight, d_mlp_gate_weight, {4, 4}, dtype);
+    FillWeightTensor(layout->mlp_weights.mlp_linears_weight[1].linear_weight, d_mlp_up_weight, {4, 4}, dtype);
+    FillWeightTensor(layout->mlp_weights.mlp_linears_weight[2].linear_weight, d_mlp_down_weight, {4, 4}, dtype);
 
     return layout;
 }
@@ -204,6 +205,7 @@ void RunAndCheckTransformer(bool use_prefill) {
 
     auto layer_cfg = BuildTransformerConfig();
     auto layer_layout = BuildTransformerWeights(
+        engine_cfg.model_config.data_type,
         d_qkv_weight,
         d_o_weight,
         d_norm1_gamma,
@@ -237,7 +239,7 @@ void RunAndCheckTransformer(bool use_prefill) {
     input.num_elements = 4;
     input.size = 4 * sizeof(float);
     input.shape = {1, 4};
-    input.dtype = DataType::FLOAT32;
+    input.dtype = engine_cfg.model_config.data_type;
     input.device = "gpu";
 
     Tensor output;
@@ -245,7 +247,7 @@ void RunAndCheckTransformer(bool use_prefill) {
     output.num_elements = 4;
     output.size = 4 * sizeof(float);
     output.shape = {1, 4};
-    output.dtype = DataType::FLOAT32;
+    output.dtype = engine_cfg.model_config.data_type;
     output.device = "gpu";
 
     if (use_prefill) {

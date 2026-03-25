@@ -17,10 +17,11 @@ void SwiGLU::forward(
     const size_t num_tokens = context.batch->num_tokens;
 
     launch_swiglu_kernel_from_gate_up(
-        static_cast<const float*>(gate.data),
-        static_cast<const float*>(up.data),
-        static_cast<float*>(output.data),
+        gate.data,
+        up.data,
+        output.data,
         num_tokens,
-        hidden_size
+        hidden_size,
+        gate.dtype
     );
 }

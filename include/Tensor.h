@@ -152,7 +152,7 @@ public:
     }
 
     static size_t element_size_bytes(DataType dtype) {
-        return dtype == DataType::FLOAT16 ? 2 : 4;
+        return DataTypeBytes(dtype);
     }
 
     size_t numel() const {

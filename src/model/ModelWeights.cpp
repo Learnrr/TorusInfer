@@ -61,7 +61,7 @@ std::vector<std::string> ResolveSafetensorShards(const std::string& model_path) 
 
 ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
     size_t offset = 0;
-    const DataType layout_dtype = DataType::FLOAT16;
+    const DataType layout_dtype = config.data_type;
     if (weights == nullptr) {
         LOG_ERROR("build_weight_layout called with null weights pointer");
         return ErrorCode::INVALID_INPUT;
@@ -236,7 +236,7 @@ ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
                 in_features * out_features, 
                 static_cast<void*>(static_cast<char*>(weights) + offset),
                 {in_features, out_features}, 
-                DataType::FLOAT16
+                layout_dtype
             );
             offset += linear_layout->linear_weight.size;
             layer_weights.push_back(linear_layout);
@@ -257,7 +257,7 @@ ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
                 norm_size, 
                 static_cast<void*>(static_cast<char*>(weights) + offset), 
                 {norm_size}, 
-                DataType::FLOAT16
+                layout_dtype
             );
             norm_layout->gamma = norm_layout->norm_weight.data;
             offset += norm_layout->norm_weight.size;

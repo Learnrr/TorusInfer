@@ -12,9 +12,10 @@ void Embedding::forward(const std::vector<size_t>& token_ids, Tensor& output, si
     cudaMemcpy(d_token_ids.get(), token_ids.data(), num_tokens * sizeof(size_t), cudaMemcpyHostToDevice);
     launch_embedding_kernel(
         d_token_ids.get(), 
-        static_cast<float*>(embedding_weight_gpu->data),
-        static_cast<float*>(output.data), 
+        embedding_weight_gpu->data,
+        output.data,
         num_tokens, 
-        embedding_dim
+        embedding_dim,
+        output.dtype
     );
 }

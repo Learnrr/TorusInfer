@@ -117,18 +117,18 @@ void Attention::prefill_forward(
         LOG_ERROR("Failed to build read cache");
         return;
     }
-    std::vector<float*> h_kcache_block_ptrs(num_tokens);
-    std::vector<float*> h_vcache_block_ptrs(num_tokens);
+    std::vector<void*> h_kcache_block_ptrs(num_tokens);
+    std::vector<void*> h_vcache_block_ptrs(num_tokens);
     for (size_t i = 0; i < num_tokens; ++i) {
-        h_kcache_block_ptrs[i] = static_cast<float*>(h_kcache_block_ptrs_void[i]);
-        h_vcache_block_ptrs[i] = static_cast<float*>(h_vcache_block_ptrs_void[i]);
+        h_kcache_block_ptrs[i] = h_kcache_block_ptrs_void[i];
+        h_vcache_block_ptrs[i] = h_vcache_block_ptrs_void[i];
     }
     LOG_DEBUG("build_read_cache completed with num_tokens: " + std::to_string(num_tokens));
 
     size_t* d_block_ids = nullptr;
     size_t* d_block_offsets = nullptr;
-    float** d_kcache_block_ptrs = nullptr;
-    float** d_vcache_block_ptrs = nullptr;
+    void** d_kcache_block_ptrs = nullptr;
+    void** d_vcache_block_ptrs = nullptr;
     cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_block_ids), num_tokens * sizeof(size_t));
     if (cuda_err != cudaSuccess) {
         LOG_ERROR("Failed to allocate device memory for block IDs");
@@ -139,12 +139,12 @@ void Attention::prefill_forward(
         LOG_ERROR("Failed to allocate device memory for block offsets");
         return;
     }
-    cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_kcache_block_ptrs), num_tokens * sizeof(float*));
+    cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_kcache_block_ptrs), num_tokens * sizeof(void*));
     if (cuda_err != cudaSuccess) {
         LOG_ERROR("Failed to allocate device memory for K-cache block pointers");
         return;
     }
-    cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_vcache_block_ptrs), num_tokens * sizeof(float*));
+    cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_vcache_block_ptrs), num_tokens * sizeof(void*));
     if (cuda_err != cudaSuccess) {
         LOG_ERROR("Failed to allocate device memory for V-cache block pointers");
         return;
@@ -159,29 +159,29 @@ void Attention::prefill_forward(
         LOG_ERROR("Failed to copy block offsets to device");
         return;
     }
-    cuda_err = cudaMemcpy(d_kcache_block_ptrs, h_kcache_block_ptrs.data(), num_tokens * sizeof(float*), cudaMemcpyHostToDevice);
+    cuda_err = cudaMemcpy(d_kcache_block_ptrs, h_kcache_block_ptrs.data(), num_tokens * sizeof(void*), cudaMemcpyHostToDevice);
     if (cuda_err != cudaSuccess) {
         LOG_ERROR("Failed to copy K-cache block pointers to device");
         return;
     }
-    cuda_err = cudaMemcpy(d_vcache_block_ptrs, h_vcache_block_ptrs.data(), num_tokens * sizeof(float*), cudaMemcpyHostToDevice);
+    cuda_err = cudaMemcpy(d_vcache_block_ptrs, h_vcache_block_ptrs.data(), num_tokens * sizeof(void*), cudaMemcpyHostToDevice);
     if (cuda_err != cudaSuccess) {
         LOG_ERROR("Failed to copy V-cache block pointers to device");
         return;
     }
-    CudaUniquePtr<float*> d_kcache_block_ptrs_dev(d_kcache_block_ptrs);
-    CudaUniquePtr<float*> d_vcache_block_ptrs_dev(d_vcache_block_ptrs);
+    CudaUniquePtr<void*> d_kcache_block_ptrs_dev(d_kcache_block_ptrs);
+    CudaUniquePtr<void*> d_vcache_block_ptrs_dev(d_vcache_block_ptrs);
     CudaUniquePtr<size_t> d_block_ids_dev(d_block_ids);
     CudaUniquePtr<size_t> d_block_offsets_dev(d_block_offsets);
     LOG_DEBUG("Copied block IDs, block offsets, K-cache block pointers, and V-cache block pointers to device");
     size_t layer_id = context.layer_id;
     launch_attention_qk_softmax_pv_kernel(
-        (float*)q.data,
+        q.data,
         d_kcache_block_ptrs_dev.get(),
         d_vcache_block_ptrs_dev.get(),
         d_block_ids_dev.get(),
         d_block_offsets_dev.get(),
-        (float*)attn_output.data,
+        attn_output.data,
         batch_seq_len,
         context.config->num_hidden_layers,
         context.config->num_heads,
@@ -189,7 +189,8 @@ void Attention::prefill_forward(
         context.config->head_dim,
         BLOCK_SIZE,
         context.config->max_seq_len,
-        layer_id
+        layer_id,
+        q.dtype
     );
     LOG_DEBUG("Launched attention QK softmax PV kernel for layer " + std::to_string(layer_id));
     err = output_projection(attn_output, layer_layout.o_proj_weight, output);
@@ -303,11 +304,11 @@ void Attention::decode_forward(
     }
     //change void* cache block pointers to float* pointers for attention kernel
     size_t total_history_tokens = h_history_block_offsets.size();
-    std::vector<float*> h_history_kcache_block_ptrs(total_history_tokens);
-    std::vector<float*> h_history_vcache_block_ptrs(total_history_tokens);
+    std::vector<void*> h_history_kcache_block_ptrs(total_history_tokens);
+    std::vector<void*> h_history_vcache_block_ptrs(total_history_tokens);
     for (size_t i = 0; i < total_history_tokens; ++i) {
-        h_history_kcache_block_ptrs[i] = static_cast<float*>(h_history_kcache_block_ptrs_void[i]);
-        h_history_vcache_block_ptrs[i] = static_cast<float*>(h_history_vcache_block_ptrs_void[i]);
+        h_history_kcache_block_ptrs[i] = h_history_kcache_block_ptrs_void[i];
+        h_history_vcache_block_ptrs[i] = h_history_vcache_block_ptrs_void[i];
     }
     LOG_DEBUG("Read cache built successfully, total_history_tokens: " + std::to_string(total_history_tokens));
 
@@ -315,8 +316,8 @@ void Attention::decode_forward(
     size_t* d_history_block_offsets = nullptr;
     size_t* d_query_hist_start = nullptr;
     size_t* d_query_hist_len = nullptr;
-    float** d_history_kcache_block_ptrs = nullptr;
-    float** d_history_vcache_block_ptrs = nullptr;
+    void** d_history_kcache_block_ptrs = nullptr;
+    void** d_history_vcache_block_ptrs = nullptr;
     
     cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_history_block_offsets), total_history_tokens * sizeof(size_t));
     if (cuda_err != cudaSuccess) {
@@ -333,12 +334,12 @@ void Attention::decode_forward(
         LOG_ERROR("Failed to allocate device memory for query history lengths");
         return;
     }
-    cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_history_kcache_block_ptrs), total_history_tokens * sizeof(float*));
+    cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_history_kcache_block_ptrs), total_history_tokens * sizeof(void*));
     if (cuda_err != cudaSuccess) {
         LOG_ERROR("Failed to allocate device memory for history K-cache block pointers");
         return;
     }
-    cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_history_vcache_block_ptrs), total_history_tokens * sizeof(float*));
+    cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_history_vcache_block_ptrs), total_history_tokens * sizeof(void*));
     if (cuda_err != cudaSuccess) {
         LOG_ERROR("Failed to allocate device memory for history V-cache block pointers");
         return;
@@ -358,12 +359,12 @@ void Attention::decode_forward(
         LOG_ERROR("Failed to copy query history lengths to device");
         return;
     }
-    cuda_err = cudaMemcpy(d_history_kcache_block_ptrs, h_history_kcache_block_ptrs.data(), total_history_tokens * sizeof(float*), cudaMemcpyHostToDevice);
+    cuda_err = cudaMemcpy(d_history_kcache_block_ptrs, h_history_kcache_block_ptrs.data(), total_history_tokens * sizeof(void*), cudaMemcpyHostToDevice);
     if (cuda_err != cudaSuccess) {
         LOG_ERROR("Failed to copy history K-cache block pointers to device");
         return;
     }
-    cuda_err = cudaMemcpy(d_history_vcache_block_ptrs, h_history_vcache_block_ptrs.data(), total_history_tokens * sizeof(float*), cudaMemcpyHostToDevice);
+    cuda_err = cudaMemcpy(d_history_vcache_block_ptrs, h_history_vcache_block_ptrs.data(), total_history_tokens * sizeof(void*), cudaMemcpyHostToDevice);
     if (cuda_err != cudaSuccess) {
         LOG_ERROR("Failed to copy history V-cache block pointers to device");
         return;
@@ -372,8 +373,8 @@ void Attention::decode_forward(
     CudaUniquePtr<size_t> d_history_block_offsets_dev(d_history_block_offsets);
     CudaUniquePtr<size_t> d_query_hist_start_dev(d_query_hist_start);
     CudaUniquePtr<size_t> d_query_hist_len_dev(d_query_hist_len);
-    CudaUniquePtr<float*> d_history_kcache_block_ptrs_dev(d_history_kcache_block_ptrs);
-    CudaUniquePtr<float*> d_history_vcache_block_ptrs_dev(d_history_vcache_block_ptrs);
+    CudaUniquePtr<void*> d_history_kcache_block_ptrs_dev(d_history_kcache_block_ptrs);
+    CudaUniquePtr<void*> d_history_vcache_block_ptrs_dev(d_history_vcache_block_ptrs);
     //copy metadata to device
 
     LOG_DEBUG("Copied block IDs, block offsets, K-cache block pointers, and V-cache block pointers to device");
@@ -392,13 +393,13 @@ void Attention::decode_forward(
     attn_output.size = attn_output.num_elements * Tensor::element_size_bytes(attn_output.dtype);
     size_t layer_id = context.layer_id;
     launch_attention_qk_softmax_pv_kernel_decode(
-        (float*)q.data,
+        q.data,
         d_history_kcache_block_ptrs_dev.get(),
         d_history_vcache_block_ptrs_dev.get(),
         d_history_block_offsets_dev.get(),
         d_query_hist_start_dev.get(),
         d_query_hist_len_dev.get(),
-        (float*)attn_output.data,
+        attn_output.data,
         batch_seq_len,
         total_history_tokens,
         context.config->num_hidden_layers,
@@ -407,7 +408,8 @@ void Attention::decode_forward(
         context.config->head_dim,
         BLOCK_SIZE,
         context.config->max_seq_len,
-        layer_id
+        layer_id,
+        q.dtype
     );
     LOG_DEBUG("Launched attention QK softmax PV kernel for layer " + std::to_string(layer_id));
 
@@ -452,8 +454,8 @@ ErrorCode Attention::write_cache(
 
     size_t* d_block_ids_raw = nullptr;
     size_t* d_block_offsets_raw = nullptr;
-    float** d_kcache_block_ptrs_raw = nullptr;
-    float** d_vcache_block_ptrs_raw = nullptr;
+    void** d_kcache_block_ptrs_raw = nullptr;
+    void** d_vcache_block_ptrs_raw = nullptr;
     cudaError_t cuda_err;
     cuda_err = cudaMalloc(reinterpret_cast<void**>(&d_block_ids_raw), num_tokens * sizeof(size_t));
     if (cuda_err != cudaSuccess) {
@@ -489,22 +491,23 @@ ErrorCode Attention::write_cache(
     }
     CudaUniquePtr<size_t> d_block_ids(d_block_ids_raw);
     CudaUniquePtr<size_t> d_block_offsets(d_block_offsets_raw);
-    CudaUniquePtr<float*> d_kcache_block_ptrs(d_kcache_block_ptrs_raw);
-    CudaUniquePtr<float*> d_vcache_block_ptrs(d_vcache_block_ptrs_raw);
+    CudaUniquePtr<void*> d_kcache_block_ptrs(d_kcache_block_ptrs_raw);
+    CudaUniquePtr<void*> d_vcache_block_ptrs(d_vcache_block_ptrs_raw);
 
     launch_write_kvcache_kernel(
         d_kcache_block_ptrs.get(), 
         d_vcache_block_ptrs.get(), 
         d_block_ids.get(),
         d_block_offsets.get(), 
-        static_cast<const float*>(key.data), 
-        static_cast<const float*>(value.data),
+        key.data,
+        value.data,
         num_tokens,
         context.config->num_hidden_layers,
         context.config->num_kv_heads,
         context.config->head_dim,
         BLOCK_SIZE,
-        context.layer_id
+        context.layer_id,
+        key.dtype
     );
     return ErrorCode::SUCCESS;
 }
@@ -672,7 +675,8 @@ ErrorCode Attention::qkv_projection(
         batch_seq_len, 
         num_heads,
         num_kv_heads, //GHA 
-        head_dim
+        head_dim,
+        input.dtype
     );
     return ErrorCode::SUCCESS;
 
@@ -693,12 +697,13 @@ ErrorCode Attention::output_projection(
     size_t num_heads = attention_config.num_attention_heads;
     size_t head_dim = attention_config.head_dim;
     launch_output_projection_kernel(
-        static_cast<const float*>(input.data),
-        static_cast<const float*>(weight.data),
-        static_cast<float*>(output.data),
+        input.data,
+        weight.data,
+        output.data,
         batch_seq_len,
         num_heads,
-        head_dim
+        head_dim,
+        input.dtype
     );
     return ErrorCode::SUCCESS;
 }
