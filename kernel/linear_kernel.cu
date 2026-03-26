@@ -1,6 +1,6 @@
 #include "cuda_runtime.h"
 #include <cuda_fp16.h>
-#include "linear_kernel.h"
+#include "kernel/linear_kernel.h"
 
 template <typename T>
 __device__ inline float to_float(T v) {

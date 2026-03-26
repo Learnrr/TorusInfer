@@ -6,7 +6,7 @@
 #include "ModelWeights.h"
 #include "Batch.h"
 #include "Workspace.h"
-#include "Layer.h"
+#include "layer/Layer.h"
 #include "Tensor.h"
 #include "TransformerLayer.h"
 #include "LayerNorm.h"

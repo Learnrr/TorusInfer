@@ -1,4 +1,8 @@
 #include "Engine.h"
+#include<vector>
+#include "Scheduler.h"
+
+
 
 void Engine::init(char* llm_engine_config_path) {
     engine_config.build_from_file(llm_engine_config_path);
@@ -34,14 +38,14 @@ void Engine::run() {
     runner_thread = std::thread(&Scheduler::schedule, scheduler.get());
 }   
 
-void Engine::create_sequence(size_t seq_id, vector<size_t> token_ids) {
+void Engine::create_sequence(size_t seq_id, std::vector<size_t> token_ids) {
     ErrorCode error = scheduler->addSequence(seq_id, token_ids);
     if (error != ErrorCode::SUCCESS) {
         // Handle error
     }
 }
 
-void Engine::get_sequence_output(size_t seq_id, vector<size_t>& output_token_ids) {
+void Engine::get_sequence_output(size_t seq_id, std::vector<size_t>& output_token_ids) {
 
     std::shared_ptr<Sequence> seq;
     ErrorCode error = scheduler->getSequenceById(seq_id, seq);

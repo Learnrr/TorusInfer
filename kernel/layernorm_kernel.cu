@@ -1,4 +1,4 @@
-#include "layernorm_kernel.h"
+#include "kernel/layernorm_kernel.h"
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>

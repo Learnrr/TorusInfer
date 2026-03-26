@@ -1,4 +1,4 @@
-#include "residual_add_kernel.h"
+#include "kernel/residual_add_kernel.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 

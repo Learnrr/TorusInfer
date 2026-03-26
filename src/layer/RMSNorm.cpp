@@ -1,5 +1,5 @@
-#include "RMSNorm.h"
-#include "rmsnorm_kernel.h"
+#include "layer/RMSNorm.h"
+#include "kernel/rmsnorm_kernel.h"
 
 void RMSNorm::prefill_forward(const Tensor& input, Tensor& output, ForwardContext& context) {
 

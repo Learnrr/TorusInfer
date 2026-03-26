@@ -1,5 +1,5 @@
-#include "ResidualAdd.h"
-#include "residual_add_kernel.h"
+#include "layer/ResidualAdd.h"
+#include "kernel/residual_add_kernel.h"
 
 void ResidualAdd::prefill_forward(const Tensor& input, Tensor& output, ForwardContext& context) {
     const size_t num_elements = input.numel();

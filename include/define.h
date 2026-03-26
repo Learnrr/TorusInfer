@@ -28,4 +28,3 @@ inline constexpr const char* DataTypeName(DataType dtype) {
     return "UNKNOWN";
 }
 
-typedef DataType::FLOAT32 float32;

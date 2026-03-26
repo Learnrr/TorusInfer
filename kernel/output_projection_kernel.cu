@@ -1,7 +1,7 @@
 
 #include "cuda_runtime.h"
 #include <cuda_fp16.h>
-#include "output_projection_kernel.h"
+#include "kernel/output_projection_kernel.h"
 
 template <typename T>
 __device__ inline float to_float(T v) {

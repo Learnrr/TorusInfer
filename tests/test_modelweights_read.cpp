@@ -1,4 +1,5 @@
 /*
+git clone https://huggingface.co/Qwen/Qwen2.5-7B-Instruct to /llm_infer_engine/weights/Qwen2.5-7B-Instruct
 cd tests
 nvcc -std=c++17 -O2 -I../ -I../include -I../include/model \
 -I../include/utils -I../include/layer test_modelweights_read.cpp \

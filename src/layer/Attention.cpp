@@ -1,8 +1,8 @@
-#include "Attention.h"
-#include "attention_kernel.h"
-#include "projection_kernel.h"
-#include "output_projection_kernel.h"
-#include "write_kvcache_kernel.h"
+#include "layer/Attention.h"
+#include "kernel/attention_kernel.h"
+#include "kernel/projection_kernel.h"
+#include "kernel/output_projection_kernel.h"
+#include "kernel/write_kvcache_kernel.h"
 #include "utils/cuda_deleter.h"
 #include <cuda_runtime.h>
 #include <vector>
@@ -192,6 +192,11 @@ void Attention::prefill_forward(
         layer_id,
         q.dtype
     );
+    cuda_err = cudaGetLastError();
+    if (cuda_err != cudaSuccess) {
+        LOG_ERROR("Prefill attention kernel launch failed");
+        return;
+    }
     LOG_DEBUG("Launched attention QK softmax PV kernel for layer " + std::to_string(layer_id));
     err = output_projection(attn_output, layer_layout.o_proj_weight, output);
     if (err != ErrorCode::SUCCESS) {
@@ -411,6 +416,11 @@ void Attention::decode_forward(
         layer_id,
         q.dtype
     );
+    cuda_err = cudaGetLastError();
+    if (cuda_err != cudaSuccess) {
+        LOG_ERROR("Decode attention kernel launch failed");
+        return;
+    }
     LOG_DEBUG("Launched attention QK softmax PV kernel for layer " + std::to_string(layer_id));
 
     err = output_projection(attn_output, layer_layout.o_proj_weight, output);

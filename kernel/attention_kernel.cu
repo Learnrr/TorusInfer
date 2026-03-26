@@ -1,6 +1,6 @@
 #include "cuda_runtime.h"
 #include <cuda_fp16.h>
-#include "attention_kernel.h"
+#include "kernel/attention_kernel.h"
 
 template <typename T>
 __device__ inline float to_float(T v) {
@@ -118,8 +118,9 @@ void launch_attention_qk_softmax_pv_kernel(
 ) {
     dim3 grid(num_tokens, num_q_heads);
     dim3 block(head_dim);
+    size_t shared_mem_bytes = static_cast<size_t>(num_tokens > 0 ? num_tokens : 1) * sizeof(float);
     if (dtype == DataType::FLOAT32) {
-        attention_qk_softmax_Pv_kernel<float><<<grid, block, max_seq_len * sizeof(float)>>>(
+        attention_qk_softmax_Pv_kernel<float><<<grid, block, shared_mem_bytes>>>(
             static_cast<const float*>(q),
             kcache_block_ptrs,
             vcache_block_ptrs,
@@ -136,7 +137,7 @@ void launch_attention_qk_softmax_pv_kernel(
             layer_id
         );
     } else {
-        attention_qk_softmax_Pv_kernel<__half><<<grid, block, max_seq_len * sizeof(float)>>>(
+        attention_qk_softmax_Pv_kernel<__half><<<grid, block, shared_mem_bytes>>>(
             static_cast<const __half*>(q),
             kcache_block_ptrs,
             vcache_block_ptrs,
@@ -268,8 +269,10 @@ void launch_attention_qk_softmax_pv_kernel_decode(
 ) {
     dim3 grid(num_queries, num_q_heads);
     dim3 block(head_dim);
+    size_t shared_tokens = static_cast<size_t>(total_history_tokens > 0 ? total_history_tokens : 1);
+    size_t shared_mem_bytes = shared_tokens * sizeof(float);
     if (dtype == DataType::FLOAT32) {
-        attention_qk_softmax_Pv_decode_kernel<float><<<grid, block, max_seq_len * sizeof(float)>>>(
+        attention_qk_softmax_Pv_decode_kernel<float><<<grid, block, shared_mem_bytes>>>(
             static_cast<const float*>(q),
             history_kcache_block_ptrs,
             history_vcache_block_ptrs,
@@ -288,7 +291,7 @@ void launch_attention_qk_softmax_pv_kernel_decode(
             layer_id
         );
     } else {
-        attention_qk_softmax_Pv_decode_kernel<__half><<<grid, block, max_seq_len * sizeof(float)>>>(
+        attention_qk_softmax_Pv_decode_kernel<__half><<<grid, block, shared_mem_bytes>>>(
             static_cast<const __half*>(q),
             history_kcache_block_ptrs,
             history_vcache_block_ptrs,

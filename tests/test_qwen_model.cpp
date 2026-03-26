@@ -78,7 +78,7 @@ ModelConfig BuildRealConfig() {
     // Keep workspace and test runtime manageable while preserving real model topology.
     cfg.max_seq_len = 16;
     // Kernels in this project currently run as float paths.
-    cfg.data_type = DataType::FLOAT32;
+    cfg.data_type = DataType::FLOAT16;
 
     return cfg;
 }

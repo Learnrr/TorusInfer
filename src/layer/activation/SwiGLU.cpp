@@ -1,5 +1,5 @@
-#include "SwiGLU.h"
-#include "swiglu_kernel.h"
+#include "layer/activation/SwiGLU.h"
+#include "kernel/swiglu_kernel.h"
 
 void SwiGLU::forward(
     const Tensor& gate,

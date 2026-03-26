@@ -1,5 +1,5 @@
-#include "LayerNorm.h"
-#include "layernorm_kernel.h"
+#include "layer/LayerNorm.h"
+#include "kernel/layernorm_kernel.h"
 
 void LayerNorm::prefill_forward(const Tensor& input, Tensor& output, ForwardContext& context){
 

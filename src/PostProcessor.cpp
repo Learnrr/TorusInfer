@@ -1,42 +1,130 @@
 #include "PostProcessor.h"
-#include <limits>
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include "half_float/half.hpp"
+#include "utils/logger.h"
+
+using half_float::half;
+
+namespace {
+
+template <typename T>
+void apply_temperature_impl(
+    const Tensor& input, 
+    Tensor& output, 
+    size_t vocab_size, 
+    float temperature
+) {
+    const T* in = static_cast<const T*>(input.data);
+    T* out = static_cast<T*>(output.data);
+    const float safe_temperature = std::max(temperature, 1e-5f);
+    // divide logits by temperature
+    for (size_t i = 0; i < vocab_size; ++i) {
+        float v = static_cast<float>(in[i]);
+        v /= safe_temperature;
+        out[i] = static_cast<T>(v);
+    }
+}
+
+template <typename T>
+void apply_repetition_penalty_impl(
+    const Tensor& input,
+    Tensor& output,
+    size_t vocab_size,
+    const std::vector<size_t>& recent_token_ids,
+    float penalty
+) {
+    const T* in = static_cast<const T*>(input.data);
+    T* out = static_cast<T*>(output.data);
+
+    for (size_t i = 0; i < vocab_size; ++i) {
+        float v = static_cast<float>(in[i]);
+        if (std::find(recent_token_ids.begin(), recent_token_ids.end(), i) != recent_token_ids.end()) {
+            v /= penalty;
+        }
+        out[i] = static_cast<T>(v);
+    }
+}
+
+template <typename T>
+void top_k_impl(
+    const Tensor& input, 
+    size_t vocab_size, 
+    std::vector<std::pair<size_t, float>>& output, 
+    size_t top_k
+) {
+    const T* in = static_cast<const T*>(input.data);
+    std::vector<std::pair<size_t, float>> token_logits;
+    token_logits.reserve(vocab_size);
+
+    //token id and its logit value
+    for (size_t i = 0; i < vocab_size; ++i) {
+        token_logits.emplace_back(i, static_cast<float>(in[i]));
+    }
+    //sort in descending order on logit values
+    std::sort(token_logits.begin(), token_logits.end(),
+        [](const std::pair<size_t, float>& a, const std::pair<size_t, float>& b) {
+            return a.second > b.second;
+        });
+
+    output.clear();
+    output.reserve(std::min(top_k, token_logits.size()));
+
+    //take the top_k tokens
+    for (size_t i = 0; i < top_k && i < token_logits.size(); ++i) {
+        output.push_back(token_logits[i]);
+    }
+}
+
+} // namespace
+
 void PostProcessor::process(Tensor& input, ForwardContext& context) {
-    if (context.batch == nullptr) {
+    if (context.batch == nullptr 
+        || context.config == nullptr 
+        || input.data == nullptr) {
         return;
     }
 
     const size_t vocab_size = config.vocab_size;
     const size_t seq_count = context.batch->batch_size;
-    float* logits = static_cast<float*>(input.data);
+
+    half* logits_f16 = nullptr;
+    float* logits_f32 = nullptr;
+    if (input.dtype == DataType::FLOAT16) {
+        logits_f16 = static_cast<half*>(input.data);
+    } else if (input.dtype == DataType::FLOAT32) {
+        logits_f32 = static_cast<float*>(input.data);
+    } else {
+        return;
+    }
 
     context.batch->sampled_token_ids.clear();
     context.batch->sampled_token_ids.reserve(seq_count);
 
     for (size_t seq_idx = 0; seq_idx < seq_count; ++seq_idx) {
-        Tensor seq_logits(
-            vocab_size,
-            logits + seq_idx * vocab_size,
-            {vocab_size},
-            input.dtype
-        );
+        void* seq_ptr = nullptr;
+        if (input.dtype == DataType::FLOAT16) {
+            seq_ptr = static_cast<void*>(logits_f16 + seq_idx * vocab_size);
+        } else if(input.dtype == DataType::FLOAT32) {
+            seq_ptr = static_cast<void*>(logits_f32 + seq_idx * vocab_size);
+        } else {
+            return;
+        }
 
+        Tensor seq_logits(vocab_size, seq_ptr, {vocab_size}, input.dtype, input.device);
         apply_temperature(seq_logits, seq_logits, config.temperature);
 
         std::vector<std::pair<size_t, float>> top_k_logits;
-        top_k_logits.reserve(config.top_k);
         top_k(seq_logits, top_k_logits, config.top_k);
-
-        // Convert candidate logits to probabilities before nucleus filtering.
         apply_softmax(top_k_logits);
 
+        const float top1_prob = top_k_logits.empty() ? 0.0f : top_k_logits.front().second;
+        const size_t top1_token = top_k_logits.empty() ? 0 : top_k_logits.front().first;
+
         std::vector<std::pair<size_t, float>> top_p_logits;
-        top_p_logits.reserve(top_k_logits.size());
         top_p(top_k_logits, top_p_logits, config.top_p, config.top_k);
 
-        // Keep a valid distribution even when top_p is configured too small.
         if (top_p_logits.empty() && !top_k_logits.empty()) {
             top_p_logits.push_back(top_k_logits.front());
             top_p_logits.front().second = 1.0f;
@@ -44,66 +132,90 @@ void PostProcessor::process(Tensor& input, ForwardContext& context) {
 
         size_t sampled_token = 0;
         sample(top_p_logits, sampled_token);
+        LOG_DEBUG(
+            "PostProcessor seq_idx=" + std::to_string(seq_idx) +
+            " top1_token=" + std::to_string(top1_token) +
+            " top1_prob=" + std::to_string(top1_prob) +
+            " top_p_candidates=" + std::to_string(top_p_logits.size()) +
+            " sampled_token=" + std::to_string(sampled_token)
+        );
         context.batch->sampled_token_ids.push_back(sampled_token);
     }
 }
 
-void PostProcessor::apply_temperature(Tensor& input, Tensor& output, float temperature){
+void PostProcessor::apply_temperature(Tensor& input, Tensor& output, float temperature) {
     const size_t vocab_size = config.vocab_size;
-    for(int i=0; i < vocab_size; ++i){
-        float logit = static_cast<float*>(input.data)[i];
-        logit /= std::max(temperature, 1e-5f); // avoid division by zero
-        static_cast<float*>(output.data)[i] = logit;
+    if (input.dtype == DataType::FLOAT16) {
+        apply_temperature_impl<half>(input, output, vocab_size, temperature);
+        return;
     }
+    apply_temperature_impl<float>(input, output, vocab_size, temperature);
 }
+
 void PostProcessor::apply_repetition_penalty(
-    Tensor& input, 
-    Tensor& output, 
-    const std::vector<size_t>& recent_token_ids, 
+    Tensor& input,
+    Tensor& output,
+    const std::vector<size_t>& recent_token_ids,
     float penalty
-){
+) {
     const size_t vocab_size = config.vocab_size;
-    for(int i=0; i < vocab_size; ++i){
-        float logit = static_cast<float*>(input.data)[i];
-        if(std::find(recent_token_ids.begin(), recent_token_ids.end(), i) != recent_token_ids.end()){
-            logit /= penalty; // penalize repeated tokens
-        }
-        static_cast<float*>(output.data)[i] = logit;
+    if (input.dtype == DataType::FLOAT16) {
+        apply_repetition_penalty_impl<half>(input, output, vocab_size, recent_token_ids, penalty);
+        return;
+    }
+    apply_repetition_penalty_impl<float>(input, output, vocab_size, recent_token_ids, penalty);
+}
+
+void PostProcessor::apply_softmax(std::vector<std::pair<size_t, float>>& input) {
+    if (input.empty()) {
+        return;
+    }
+
+    float max_logit = input.front().second;
+    for (const auto& kv : input) {
+        max_logit = std::max(max_logit, kv.second);
+    }
+
+    float sum_exp = 0.0f;
+    for (auto& kv : input) {
+        kv.second = std::exp(kv.second - max_logit);
+        sum_exp += kv.second;
+    }
+
+    if (sum_exp <= 0.0f) {
+        return;
+    }
+
+    for (auto& kv : input) {
+        kv.second /= sum_exp;
     }
 }
-void PostProcessor::apply_softmax(std::vector<std::pair<size_t, float>>& input){
-    size_t num_tokens = input.size();
-    std::vector<float> logits(num_tokens);
-    for(size_t i=0;i<num_tokens; ++i){
-        logits[i] = input[i].second;
-    }
-    float max_logit = *std::max_element(logits.begin(), logits.end());
-    for(size_t i=0; i<num_tokens; ++i){
-        logits[i] = exp(logits[i] - max_logit);
-    }
-    float sum_exp = std::accumulate(logits.begin(), logits.end(), 0.0f);
-    for(size_t i=0; i<num_tokens; ++i){
-        input[i].second = logits[i] / sum_exp;
-    }
-}
-void PostProcessor::top_k(Tensor& input, std::vector<std::pair<size_t, float>>& output, size_t top_k){
+
+void PostProcessor::top_k(Tensor& input, std::vector<std::pair<size_t, float>>& output, size_t top_k) {
     const size_t vocab_size = config.vocab_size;
-    std::vector<std::pair<size_t, float>> token_logits;
-    for(int i=0; i < vocab_size; ++i){
-        token_logits.emplace_back(i, static_cast<float*>(input.data)[i]);
+    if (input.dtype == DataType::FLOAT16) {
+        top_k_impl<half>(input, vocab_size, output, top_k);
+        return;
     }
-    std::sort(token_logits.begin(), token_logits.end(), token_compare);
-    for(size_t i=0; i<top_k && i < token_logits.size(); ++i){
-        output.push_back(token_logits[i]);
-    }
+    top_k_impl<float>(input, vocab_size, output, top_k);
 }
-void PostProcessor::top_p(std::vector<std::pair<size_t, float>>& input, std::vector<std::pair<size_t, float>>& output, float top_p, size_t top_k){
+
+void PostProcessor::top_p(
+    std::vector<std::pair<size_t, float>>& input,
+    std::vector<std::pair<size_t, float>>& output,
+    float top_p,
+    size_t top_k
+) {
     if (input.empty()) {
         return;
     }
 
     const size_t limit = std::min(top_k, input.size());
     float cumulative = 0.0f;
+
+    output.clear();
+    output.reserve(limit);
+
     for (size_t i = 0; i < limit; ++i) {
         cumulative += input[i].second;
         output.push_back(input[i]);
@@ -112,31 +224,37 @@ void PostProcessor::top_p(std::vector<std::pair<size_t, float>>& input, std::vec
         }
     }
 
-    // Re-normalize the kept probabilities before sampling.
     float sum = 0.0f;
-    for (const auto& token_prob : output) {
-        sum += token_prob.second;
+    for (const auto& kv : output) {
+        sum += kv.second;
     }
+
     if (sum > 0.0f) {
-        for (auto& token_prob : output) {
-            token_prob.second /= sum;
+        for (auto& kv : output) {
+            kv.second /= sum;
         }
     }
 }
 
-void PostProcessor::sample(std::vector<std::pair<size_t, float>>& input, size_t& sampled_token){
-    size_t num_tokens = input.size();
-    std::vector<float> probs(num_tokens);
-    for(size_t i=0; i<num_tokens; ++i){
-        probs[i] = input[i].second;
+void PostProcessor::sample(
+    std::vector<std::pair<size_t, 
+    float>>& input, 
+    size_t& sampled_token
+) {
+    if (input.empty()) {
+        sampled_token = 0;
+        return;
     }
-    float sum_probs = 0.0f;
-    float random_value = static_cast<float>(rand()) / RAND_MAX; // random value in [0, 1]
-    for(size_t i=0; i<num_tokens; ++i){
-        sum_probs += probs[i];
-        if(random_value < sum_probs){
-            sampled_token = input[i].first;
-            break;
+
+    float cdf = 0.0f;
+    const float r = static_cast<float>(rand()) / RAND_MAX;
+    for (const auto& kv : input) {
+        cdf += kv.second;
+        if (r < cdf) {
+            sampled_token = kv.first;
+            return;
         }
     }
+
+    sampled_token = input.back().first;
 }

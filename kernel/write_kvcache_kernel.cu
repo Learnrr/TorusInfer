@@ -1,6 +1,6 @@
 #include "cuda_runtime.h"
 #include <cuda_fp16.h>
-#include "write_kvcache_kernel.h"
+#include "kernel/write_kvcache_kernel.h"
 
 template <typename T>
 __global__ void write_kvcache_kernel(

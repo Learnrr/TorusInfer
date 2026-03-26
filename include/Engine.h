@@ -2,6 +2,7 @@
 
 #include "KVCacheManager.h"
 #include "Workspace.h"
+#include "Scheduler.h"
 #include "Sequence.h"
 #include "IModel.h"
 #include "Tensor.h"
@@ -33,9 +34,9 @@ class Engine{
 
         void run(); 
 
-        void create_sequence(size_t seq_id, vector<size_t> token_ids);
+        void create_sequence(size_t seq_id, std::vector<size_t> token_ids);
 
-        void get_sequence_output(size_t seq_id, vector<size_t>& output_token_ids);
+        void get_sequence_output(size_t seq_id, std::vector<size_t>& output_token_ids);
 
         void check_sequence_state(size_t seq_id, SequenceState& state);
 

@@ -21,15 +21,18 @@ class Scheduler{
             IModel* model, 
             Workspace* workspace, 
             const LLMEngineConfig& engine_config
-        ) {
-            init(cache_manager, model, workspace, engine_config);
-        }
+        )
+            : cache_manager(cache_manager),
+              model(model),
+              engine_config(engine_config),
+              workspace(workspace),
+              eos_token_id(engine_config.model_config.eos_token_id) {}
 
 
         void schedule();
         void request_stop();
     
-        ErrorCode addSequence(size_t seq_id, vector<size_t> token_ids);
+        ErrorCode addSequence(size_t seq_id, std::vector<size_t> token_ids);
 
         ErrorCode getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq);
 
@@ -40,11 +43,11 @@ class Scheduler{
         ErrorCode removeFinishedSequenceById(size_t seq_id);
 
     private:
-        vector<shared_ptr<Sequence>> prepared_queue;
-        vector<shared_ptr<Sequence>> waiting_queue;
-        vector<shared_ptr<Sequence>> decoding_queue;
-        vector<shared_ptr<Sequence>> prefilling_queue;
-        vector<shared_ptr<Sequence>> finished_queue;
+        std::vector<std::shared_ptr<Sequence>> prepared_queue;
+        std::vector<std::shared_ptr<Sequence>> waiting_queue;
+        std::vector<std::shared_ptr<Sequence>> decoding_queue;
+        std::vector<std::shared_ptr<Sequence>> prefilling_queue;
+        std::vector<std::shared_ptr<Sequence>> finished_queue;
 
         std::mutex queue_mutex;
 
@@ -57,21 +60,9 @@ class Scheduler{
 
         ErrorCode movePrefilledToDecoding(const Batch& prefill_batch);
         ErrorCode moveDecodingToFinished(const Batch& decode_batch);
-        variant<Batch, ErrorCode> buildDecodeBatch();
-        variant<Batch, ErrorCode> buildPrefillBatch();
+        std::variant<Batch, ErrorCode> buildDecodeBatch();
+        std::variant<Batch, ErrorCode> buildPrefillBatch();
         ErrorCode launchSequence();
         ErrorCode handleFinishedSequence();
         void appendDecodedTokens(Batch& decode_batch);
-        ErrorCode init(
-            KVCacheManager* cache_manager, 
-            IModel* model, 
-            Workspace* workspace, 
-            const LLMEngineConfig& engine_config
-        ) {
-            this->cache_manager = cache_manager;
-            this->model = model;
-            this->workspace = workspace;
-            this->engine_config = engine_config;
-            return ErrorCode::SUCCESS;
-        }
 };

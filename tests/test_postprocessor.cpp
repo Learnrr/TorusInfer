@@ -24,11 +24,11 @@ ModelConfig BuildConfig(size_t vocab_size, float temperature, size_t top_k, floa
     return cfg;
 }
 
-ForwardContext BuildContext(Batch* batch) {
+ForwardContext BuildContext(Batch* batch, ModelConfig* config) {
     ForwardContext ctx{};
     ctx.batch = batch;
     ctx.workspace = nullptr;
-    ctx.config = nullptr;
+    ctx.config = config;
     ctx.layer_id = 0;
     return ctx;
 }
@@ -40,7 +40,7 @@ void TestProcessSkipsNullBatch() {
     std::vector<float> logits = {0.1f, 0.2f, 0.9f, 0.3f, 0.0f};
     Tensor input(logits.size(), logits.data(), {1, logits.size()}, cfg.data_type, "cpu");
 
-    ForwardContext ctx = BuildContext(nullptr);
+    ForwardContext ctx = BuildContext(nullptr, &cfg);
     post_processor.process(input, ctx);
 }
 
@@ -57,7 +57,7 @@ void TestProcessTopK1PicksArgmaxPerSequence() {
     Batch batch{};
     batch.batch_size = 2;
 
-    ForwardContext ctx = BuildContext(&batch);
+    ForwardContext ctx = BuildContext(&batch, &cfg);
     post_processor.process(input, ctx);
 
     assert(batch.sampled_token_ids.size() == 2);
@@ -75,7 +75,7 @@ void TestTemperatureZeroStillProducesValidSampling() {
     Batch batch{};
     batch.batch_size = 1;
 
-    ForwardContext ctx = BuildContext(&batch);
+    ForwardContext ctx = BuildContext(&batch, &cfg);
     post_processor.process(input, ctx);
 
     assert(batch.sampled_token_ids.size() == 1);

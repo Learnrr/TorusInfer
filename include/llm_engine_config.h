@@ -5,25 +5,17 @@
 #include "utils/logger.h"
 #include "error.h"
 
+
 class LLMEngineConfig {
 public:
-    size_t max_batch_size;
-    size_t max_sequence_length;
-    size_t total_cache_size;
-    size_t block_size;
+    size_t max_batch_size = 0;
+    size_t max_sequence_length = 0;
+    size_t total_cache_size = 0;
+    size_t block_size = 0;
     ModelConfig model_config;
     std::string model_config_path;
 
-    LLMEngineConfig(
-        size_t max_batch_size, 
-        size_t max_sequence_length,
-        size_t total_cache_size,
-        size_t block_size
-    )
-        : max_batch_size(max_batch_size), 
-        max_sequence_length(max_sequence_length), 
-        total_cache_size(total_cache_size), 
-        block_size(block_size) {}
+    LLMEngineConfig() = default;
 
     ErrorCode build_from_file(const char* config_path) {
         std::ifstream file(config_path);

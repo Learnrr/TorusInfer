@@ -20,7 +20,18 @@ void Scheduler::schedule() {
                 return;
             } 
             Batch decode_batch = std::get<Batch>(result);
+            if (model == nullptr || workspace == nullptr) {
+                LOG_ERROR("Scheduler decode path has null model/workspace");
+                return;
+            }
+            LOG_DEBUG(
+                "Calling model->decode_forward: num_tokens=" + std::to_string(decode_batch.num_tokens) +
+                ", token_ids=" + std::to_string(decode_batch.token_ids.size()) +
+                ", token_positions=" + std::to_string(decode_batch.token_positions.size()) +
+                ", sequences=" + std::to_string(decode_batch.sequences.size())
+            );
             model->decode_forward(decode_batch, *workspace);
+            LOG_DEBUG("Returned from model->decode_forward");
             appendDecodedTokens(decode_batch);
 
             moveDecodingToFinished(decode_batch);
@@ -41,7 +52,18 @@ void Scheduler::schedule() {
                 return;
             }
             Batch prefill_batch = std::get<Batch>(result);
+            if (model == nullptr || workspace == nullptr) {
+                LOG_ERROR("Scheduler prefill path has null model/workspace");
+                return;
+            }
+            LOG_DEBUG(
+                "Calling model->prefill_forward: num_tokens=" + std::to_string(prefill_batch.num_tokens) +
+                ", token_ids=" + std::to_string(prefill_batch.token_ids.size()) +
+                ", token_positions=" + std::to_string(prefill_batch.token_positions.size()) +
+                ", sequences=" + std::to_string(prefill_batch.sequences.size())
+            );
             model->prefill_forward(prefill_batch, *workspace);
+            LOG_DEBUG("Returned from model->prefill_forward");
 
             for (const auto& seq : prefill_batch.sequences) {
                 if (seq && seq->state == SequenceState::PREFILLING) {
@@ -111,11 +133,12 @@ ErrorCode Scheduler::movePrefilledToDecoding(const Batch& prefill_batch) {
     return ErrorCode::SUCCESS;
 }
 
-variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
+std::variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
     // Implement the logic to build a batch of sequences for processing
     std::lock_guard<std::mutex> lock(queue_mutex);
     Batch batch;
     batch.batch_size = 0;
+    batch.num_tokens = 0;
     
     for(auto& seq : decoding_queue){
         if(seq->state!= SequenceState::FINISHED){
@@ -133,9 +156,9 @@ variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
             batch.batch_size++;
 
             if(seq->seq_len % BLOCK_SIZE == 0){
-                variant<CacheBlock*, ErrorCode> result = cache_manager->allocate_cache_block();
-                if(std::holds_alternative<CacheBlock*>(result)){
-                    seq->blocks.push_back(std::get<CacheBlock*>(result));
+                std::variant<std::shared_ptr<CacheBlock>, ErrorCode> result = cache_manager->allocate_cache_block();
+                if(std::holds_alternative<std::shared_ptr<CacheBlock>>(result)){
+                    seq->blocks.push_back(std::get<std::shared_ptr<CacheBlock>>(result));
                 } else {
                     return ErrorCode::MEMORY_FAILURE;
                 }
@@ -166,9 +189,9 @@ variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
             batch.batch_size++;
 
             if(seq->seq_len % BLOCK_SIZE == 0){
-                variant<CacheBlock*, ErrorCode> result = cache_manager->allocate_cache_block();
-                if(std::holds_alternative<CacheBlock*>(result)){
-                    seq->blocks.push_back(std::get<CacheBlock*>(result));
+                std::variant<std::shared_ptr<CacheBlock>, ErrorCode> result = cache_manager->allocate_cache_block();
+                if(std::holds_alternative<std::shared_ptr<CacheBlock>>(result)){
+                    seq->blocks.push_back(std::get<std::shared_ptr<CacheBlock>>(result));
                 } else {
                     return ErrorCode::MEMORY_FAILURE;
                 }
@@ -178,10 +201,11 @@ variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
     return batch;
 }
 
-variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
+std::variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
     std::lock_guard<std::mutex> lock(queue_mutex);
     Batch batch;
     batch.batch_size = 0;
+    batch.num_tokens = 0;
     
     for (auto it = waiting_queue.begin(); it != waiting_queue.end();) {
         auto seq = *it;
@@ -199,22 +223,25 @@ variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
             }
             batch.num_tokens += seq->token_ids.size();
             batch.batch_size++;
+
+            LOG_DEBUG("Sequence " + std::to_string(seq->seq_id) + " added to prefill batch with " + std::to_string(seq_len) + " tokens.");
             
             //allocate cache blocks for the sequence prefill
             size_t num_blocks = (seq->seq_len + BLOCK_SIZE - 1) / BLOCK_SIZE;
             for(size_t i = 0; i < num_blocks; ++i){
                 auto result = cache_manager->allocate_cache_block();
-                if(std::holds_alternative<CacheBlock*>(result)){
-                    seq->blocks.push_back(std::get<CacheBlock*>(result));
+                if(std::holds_alternative<std::shared_ptr<CacheBlock>>(result)){
+                    seq->blocks.push_back(std::get<std::shared_ptr<CacheBlock>>(result));
                 } else {
                     // Handle cache allocation failure (e.g., log an error, skip the sequence, etc.)
                     return ErrorCode::MEMORY_FAILURE;
                 }
             }
-
+            LOG_DEBUG("Sequence " + std::to_string(seq->seq_id) + " allocated " + std::to_string(num_blocks) + " cache blocks for prefill.");
             if(batch.batch_size >= MAX_PREFILL_BATCH_SIZE){
                 break;
             }
+
             continue;
         }
         ++it;
@@ -222,7 +249,7 @@ variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
     return batch;
 }
 
-ErrorCode Scheduler::addSequence(size_t seq_id, vector<size_t> token_ids) {
+ErrorCode Scheduler::addSequence(size_t seq_id, std::vector<size_t> token_ids) {
     auto new_seq = std::make_shared<Sequence>(seq_id);
     new_seq->token_ids = token_ids;
     new_seq->seq_len = token_ids.size();
@@ -253,7 +280,7 @@ ErrorCode Scheduler::handleFinishedSequence(){
         if((*it)->state == SequenceState::FINISHED){
             // Handle the finished sequence (e.g., remove from decoding queue, update cache, etc.)
             finished_queue.push_back(*it);
-            LOG_DEBUG("Sequence " + std::to_string((*it)->seq_id) + " moved to FINISHED state.");
+            LOG_DEBUG("Sequence " + std::to_string((*it)->seq_id) + " moved to FINISHED queue.");
             it = decoding_queue.erase(it);
         } else {
             ++it;
@@ -327,7 +354,7 @@ ErrorCode Scheduler::getFinishedSequenceById(size_t seq_id, std::shared_ptr<Sequ
 ErrorCode Scheduler::removeFinishedSequenceById(size_t seq_id) {
     std::lock_guard<std::mutex> lock(queue_mutex);
     for (auto it = finished_queue.begin(); it != finished_queue.end(); ++it) {
-        if (it->seq_id == seq_id) {
+        if (*it != nullptr && (*it)->seq_id == seq_id) {
             finished_queue.erase(it);
             LOG_DEBUG("Sequence " + std::to_string(seq_id) + " removed from finished queue.");
             return ErrorCode::SUCCESS;
