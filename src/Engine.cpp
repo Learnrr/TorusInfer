@@ -1,10 +1,15 @@
 #include "Engine.h"
 #include<vector>
 #include "Scheduler.h"
-
+#include <cstdlib>
+#include <string>
 
 
 void Engine::init(char* llm_engine_config_path) {
+    const char* env_log_level = std::getenv("LOG_LEVEL");
+    if (env_log_level && env_log_level[0] != '\0') {
+        LOG_INFO(std::string("LOG_LEVEL set to ") + env_log_level);
+    }
     engine_config.build_from_file(llm_engine_config_path);
 
     cache_manager = std::make_unique<KVCacheManager>();

@@ -17,6 +17,10 @@ void Attention::prefill_forward(
     ErrorCode err;
     cudaError_t cuda_err;
 
+    if (output.data != nullptr && output.size > 0) {
+        cudaMemset(output.data, 0, output.size);
+    }
+
     Tensor qkv;
     qkv.data = context.workspace->get_qkv_workspace();
     if(qkv.data == nullptr) {
@@ -214,6 +218,10 @@ void Attention::decode_forward(
 
     ErrorCode err;
     cudaError_t cuda_err;
+
+    if (output.data != nullptr && output.size > 0) {
+        cudaMemset(output.data, 0, output.size);
+    }
 
     Tensor qkv;
     qkv.data = context.workspace->get_qkv_workspace();

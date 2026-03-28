@@ -1,7 +1,10 @@
 #include "model/QWEN_Model.h"
 #include <utility>
+#include <cmath>
 #include "utils/logger.h"
 #include <stdlib.h>
+#include "half_float/half.hpp"
+#include "utils/tensor_debug.h"
 
 void QWEN_Model::init(ModelConfig config) {
     this->config = config;
@@ -46,9 +49,9 @@ void QWEN_Model::init(ModelConfig config) {
             layer_layout,
             layer_config
         ));
-        LOG_INFO("Initialized TransformerLayer " + std::to_string(i));
+        LOG_DEBUG("Initialized TransformerLayer " + std::to_string(i));
     }
-
+    LOG_INFO("Initialized all Transformer layers");
     // Create final layer norm
     LayerNormLayerConfig layernorm_config;
     layernorm_config.norm_size = config.hidden_size;
@@ -146,7 +149,7 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
     LOG_DEBUG("Calling embedding->forward in prefill");
     embedding->forward(batch.token_ids, hidden, batch.num_tokens);
     LOG_DEBUG("Finished embedding->forward in prefill");
-
+    log_tensor_anomaly(hidden, std::string("after_embedding"));
     Tensor hidden2(
         batch.num_tokens * config.hidden_size, 
         workspace.get_hidden2_workspace(),
@@ -238,6 +241,57 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         {batch.num_tokens, config.hidden_size}, 
         config.data_type
     );
+
+    auto log_tensor_nan_stats = [&](const Tensor& tensor, const char* stage) {
+        if (tensor.data == nullptr || tensor.num_elements == 0) {
+            return;
+        }
+
+        const size_t total = tensor.num_elements;
+        const size_t bytes = tensor.size;
+        void* host_buf = malloc(bytes);
+        if (host_buf == nullptr) {
+            return;
+        }
+        cudaError_t e = cudaMemcpy(host_buf, tensor.data, bytes, cudaMemcpyDeviceToHost);
+        if (e != cudaSuccess) {
+            free(host_buf);
+            return;
+        }
+
+        size_t nan_count = 0;
+        size_t inf_count = 0;
+        if (tensor.dtype == DataType::FLOAT32) {
+            const float* p = static_cast<const float*>(host_buf);
+            for (size_t i = 0; i < total; ++i) {
+                if (std::isnan(p[i])) {
+                    ++nan_count;
+                } else if (!std::isfinite(p[i])) {
+                    ++inf_count;
+                }
+            }
+        } else if (tensor.dtype == DataType::FLOAT16) {
+            const half_float::half* p = static_cast<const half_float::half*>(host_buf);
+            for (size_t i = 0; i < total; ++i) {
+                const float v = static_cast<float>(p[i]);
+                if (std::isnan(v)) {
+                    ++nan_count;
+                } else if (!std::isfinite(v)) {
+                    ++inf_count;
+                }
+            }
+        }
+
+        if (nan_count > 0 || inf_count > 0) {
+            std::ostringstream oss;
+            oss << "Decode tensor stats [" << stage << "]: total=" << total
+                << " nan=" << nan_count
+                << " inf=" << inf_count;
+            LOG_INFO(oss.str());
+        }
+
+        free(host_buf);
+    };
     {
         std::ostringstream oss;
         oss << "Running Embedding decode forward with batch.num_tokens=" << batch.num_tokens <<
@@ -248,6 +302,7 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
     LOG_DEBUG("Calling embedding->forward in decode");
     embedding->forward(batch.token_ids, hidden, batch.num_tokens);
     LOG_DEBUG("Finished embedding->forward in decode");
+    log_tensor_nan_stats(hidden, "after_embedding");
 
     Tensor hidden2(
         batch.num_tokens * config.hidden_size, 
@@ -273,6 +328,7 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         layers[i]->decode_forward(hidden, hidden2, context);
         LOG_DEBUG("Finished TransformerLayer decode_forward layer=" + std::to_string(i));
         std::swap(hidden.data, hidden2.data);
+        log_tensor_nan_stats(hidden, (std::string("after_transformer_layer_") + std::to_string(i)).c_str());
     }
 
     Tensor logits_output(
@@ -290,7 +346,9 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         LOG_INFO(oss.str());
     }
     layers[config.num_hidden_layers]->decode_forward(hidden, hidden, context);
+    log_tensor_nan_stats(hidden, "after_final_norm");
     layers[config.num_hidden_layers + 1]->decode_forward(hidden, logits_output, context);
+    log_tensor_nan_stats(logits_output, "after_lm_head");
 
     {
         std::ostringstream oss;
@@ -324,6 +382,39 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         free(logits_on_CPU.data);
         return;
     }
+    // debug ==============================
+    size_t nan_count = 0;
+    size_t inf_count = 0;
+    const size_t total_logits = batch.num_tokens * config.vocab_size;
+    if (logits_on_CPU.dtype == DataType::FLOAT32) {
+        const float* logits = static_cast<const float*>(logits_on_CPU.data);
+        for (size_t i = 0; i < total_logits; ++i) {
+            if (std::isnan(logits[i])) {
+                ++nan_count;
+            } else if (!std::isfinite(logits[i])) {
+                ++inf_count;
+            }
+        }
+    } else if (logits_on_CPU.dtype == DataType::FLOAT16) {
+        const half_float::half* logits = static_cast<const half_float::half*>(logits_on_CPU.data);
+        for (size_t i = 0; i < total_logits; ++i) {
+            const float v = static_cast<float>(logits[i]);
+            if (std::isnan(v)) {
+                ++nan_count;
+            } else if (!std::isfinite(v)) {
+                ++inf_count;
+            }
+        }
+    }
+
+    {
+        std::ostringstream oss;
+        oss << "Decode logits pre-postprocess stats: total=" << total_logits
+            << " nan=" << nan_count
+            << " inf=" << inf_count;
+        LOG_INFO(oss.str());
+    }
+    //debug ============================
     post_processor->process(logits_on_CPU, context);
     free(logits_on_CPU.data);
     LOG_DEBUG("Finished QWEN_Model::decode_forward");

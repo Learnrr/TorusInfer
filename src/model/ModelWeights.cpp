@@ -6,6 +6,7 @@
 #include <utility>
 #include <unordered_set>
 #include <unordered_map>
+#include "utils/tensor_debug.h"
 
 std::vector<std::string> ResolveSafetensorShardsFromIndex(
     const std::filesystem::path& index_path) {
@@ -662,6 +663,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
             }
             free(tmp_layer_tensor.data);
             tmp_layer_tensor.data = nullptr;
+            log_tensor_anomaly(layout.embedding_weights, name);
         } else if(name.find("layers.") != std::string::npos){
             size_t pos1 = name.find("layers.") + 7;
             size_t pos2 = name.find(".", pos1);
@@ -736,6 +738,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
+                log_tensor_anomaly(layer_layout->attention_weights.o_proj_weight, name);
             } else if(name.find("gate_proj") != std::string::npos){
                 if (layer_layout->mlp_weights.mlp_linears_weight.size() < 3) {
                     LOG_ERROR("MLP linear layouts are insufficient");
@@ -768,6 +771,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
+                log_tensor_anomaly(layer_layout->mlp_weights.mlp_linears_weight[0].linear_weight, name);
             } else if(name.find("up_proj") != std::string::npos){
                 if (layer_layout->mlp_weights.mlp_linears_weight.size() < 3) {
                     LOG_ERROR("MLP linear layouts are insufficient");
@@ -800,6 +804,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
+                log_tensor_anomaly(layer_layout->mlp_weights.mlp_linears_weight[1].linear_weight, name);
             } else if(name.find("down_proj") != std::string::npos){
                 if (layer_layout->mlp_weights.mlp_linears_weight.size() < 3) {
                     LOG_ERROR("MLP linear layouts are insufficient");
@@ -832,6 +837,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
+                log_tensor_anomaly(layer_layout->mlp_weights.mlp_linears_weight[2].linear_weight, name);
             } else if(name.find("input_layernorm") != std::string::npos){
                 if (layer_layout->norm_weights.size() < 2) {
                     LOG_ERROR("Norm layouts are insufficient");
@@ -864,6 +870,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
+                log_tensor_anomaly(layer_layout->norm_weights[0].norm_weight, name);
             } else if(name.find("post_attention_layernorm") != std::string::npos){
                 if (layer_layout->norm_weights.size() < 2) {
                     LOG_ERROR("Norm layouts are insufficient");
@@ -896,6 +903,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
+                log_tensor_anomaly(layer_layout->norm_weights[1].norm_weight, name);
             }else{
                 LOG_ERROR("Unrecognized weight name, weights may be incomplete");
                 continue;
@@ -987,6 +995,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
             has_k = false;
             has_q = false;  
             has_v = false;
+            log_tensor_anomaly(layer_layout->attention_weights.qkv_proj_weight, std::string("qkv_proj_weight"));
 
         } else if(name.find("model.norm") != std::string::npos){
             Tensor tmp_layer_tensor = load_layer(*stream, name);
@@ -1025,6 +1034,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
             }
             free(tmp_layer_tensor.data);
             tmp_layer_tensor.data = nullptr;
+            log_tensor_anomaly(final_norm_layout->norm_weight, name);
         } else if(name.find("lm_head") != std::string::npos){
             Tensor tmp_layer_tensor = load_layer(*stream, name);
             if(tmp_layer_tensor.data == nullptr){
@@ -1037,7 +1047,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                     lm_head_layout = candidate;
                 }
             }
-            if (lm_head_layout) {
+            if(lm_head_layout){
                 if (tmp_layer_tensor.size != lm_head_layout->linear_weight.size) {
                     std::ostringstream oss;
                     oss << "lm_head tensor size mismatch, src=" << tmp_layer_tensor.size
@@ -1062,6 +1072,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
             }
             free(tmp_layer_tensor.data);
             tmp_layer_tensor.data = nullptr;
+            log_tensor_anomaly(lm_head_layout->linear_weight, name);
         } else {
             LOG_ERROR("Unrecognized weight name, weights may be incomplete");
             continue;

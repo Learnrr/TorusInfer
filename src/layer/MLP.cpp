@@ -1,5 +1,6 @@
 #include "layer/MLP.h"
 #include "cuda_runtime.h"
+#include "utils/tensor_debug.h"
 
 void MLP::prefill_forward(const Tensor& input, Tensor& output, ForwardContext& context) {
     if (linears.size() < 3 || context.batch == nullptr) {
@@ -9,6 +10,12 @@ void MLP::prefill_forward(const Tensor& input, Tensor& output, ForwardContext& c
     const size_t num_tokens = context.batch->num_tokens;
     const size_t intermediate_size = mlp_config.mlp_linears[0].out_features;
     const size_t elem_bytes = Tensor::element_size_bytes(input.dtype);
+    if (context.config && context.config->mlp_intermediate_size > 0
+        && intermediate_size > context.config->mlp_intermediate_size) {
+        LOG_ERROR("MLP intermediate_size exceeds workspace size from model config");
+        return;
+    }
+    const std::string prefix = "layer=" + std::to_string(context.layer_id) + " stage=";
 
     // Gate view occupies the first half of workspace.
     Tensor gate_output;
@@ -20,6 +27,7 @@ void MLP::prefill_forward(const Tensor& input, Tensor& output, ForwardContext& c
     gate_output.device = input.device;
 
     linears[0]->prefill_forward(input, gate_output, context);
+    log_tensor_anomaly(gate_output, prefix + "mlp_gate");
 
     // Up view occupies the second half of workspace.
     Tensor up_output;
@@ -33,11 +41,14 @@ void MLP::prefill_forward(const Tensor& input, Tensor& output, ForwardContext& c
     up_output.device = input.device;
 
     linears[1]->prefill_forward(input, up_output, context);
+    log_tensor_anomaly(up_output, prefix + "mlp_up");
 
     swiglu->forward(gate_output, up_output, gate_output, context);
+    log_tensor_anomaly(gate_output, prefix + "mlp_swiglu");
 
     //output projection
     linears[2]->prefill_forward(gate_output, output, context);
+    log_tensor_anomaly(output, prefix + "mlp_down");
 
 
 }
@@ -50,6 +61,12 @@ void MLP::decode_forward(const Tensor& input, Tensor& output, ForwardContext& co
     const size_t num_tokens = context.batch->num_tokens;
     const size_t intermediate_size = mlp_config.mlp_linears[0].out_features;
     const size_t elem_bytes = Tensor::element_size_bytes(input.dtype);
+    if (context.config && context.config->mlp_intermediate_size > 0
+        && intermediate_size > context.config->mlp_intermediate_size) {
+        LOG_ERROR("MLP intermediate_size exceeds workspace size from model config");
+        return;
+    }
+    const std::string prefix = "layer=" + std::to_string(context.layer_id) + " stage=";
 
     Tensor gate_output;
     gate_output.data = context.workspace->get_mlp_workspace();
@@ -60,6 +77,7 @@ void MLP::decode_forward(const Tensor& input, Tensor& output, ForwardContext& co
     gate_output.device = input.device;
 
     linears[0]->decode_forward(input, gate_output, context);
+    log_tensor_anomaly(gate_output, prefix + "mlp_gate");
 
     Tensor up_output;
     up_output.data = static_cast<void*>(
@@ -72,9 +90,12 @@ void MLP::decode_forward(const Tensor& input, Tensor& output, ForwardContext& co
     up_output.device = input.device;
 
     linears[1]->decode_forward(input, up_output, context);
+    log_tensor_anomaly(up_output, prefix + "mlp_up");
 
     swiglu->forward(gate_output, up_output, gate_output, context);
+    log_tensor_anomaly(gate_output, prefix + "mlp_swiglu");
 
     linears[2]->decode_forward(gate_output, output, context);
+    log_tensor_anomaly(output, prefix + "mlp_down");
 }
 
