@@ -1,6 +1,6 @@
 #pragma once
 #include "layer/Linear.h"
-#include "layer/SwiGLU.h"
+#include "layer/activation/SwiGLU.h"
 #include "Tensor.h"
 #include "layer/Layer.h"
 #include "model/ModelWeights.h"

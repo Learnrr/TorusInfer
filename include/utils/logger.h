@@ -9,6 +9,7 @@
 #include <ctime>
 #include <sstream>
 #include <cstdlib>
+#include <cstring>
 
 enum class LogLevel {
     DEBUG,
@@ -83,16 +84,16 @@ class Logger{
             if (!raw_level || raw_level[0] == '\0') {
                 return LogLevel::INFO;
             }
-            if (std::strcmp(raw_level, "DEBUG") == 0) {
+            if (strcmp(raw_level, "DEBUG") == 0) {
                 return LogLevel::DEBUG;
             }
-            if (std::strcmp(raw_level, "INFO") == 0) {
+            if (strcmp(raw_level, "INFO") == 0) {
                 return LogLevel::INFO;
             }
-            if (std::strcmp(raw_level, "WARNING") == 0) {
+            if (strcmp(raw_level, "WARNING") == 0) {
                 return LogLevel::WARNING;
             }
-            if (std::strcmp(raw_level, "ERROR") == 0) {
+            if (strcmp(raw_level, "ERROR") == 0) {
                 return LogLevel::ERROR;
             }
 
