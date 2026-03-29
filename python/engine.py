@@ -2,39 +2,46 @@
 
 from python.tokenizer import Tokenizer
 from bridge.pybind import cpp_engine
-from python.sequence import Sequence
+from python.request import Request
+from python.RequestOutput import RequestOutput
 
 class Engine:
-    def __init__(self):
+    def __init__(self, llm_engine_config_path):
         self.tokenizer = Tokenizer()
-        self.sequences = {}
         self.cpp_engine = cpp_engine.Engine()
+        self.cpp_engine.init(llm_engine_config_path)
+        self.requests = {}
         return
     
-    def add_sequence(self, sequence_id, prompt):
-        if sequence_id in self.sequences:
-            raise ValueError(f"Sequence ID {sequence_id} already exists.")
-        
-        sequence = Sequence(sequence_id, prompt)
-        self.sequences[sequence_id] = sequence
-        
-        # Tokenize the prompt and add to the C++ engine
-        token_ids = self.tokenizer.tokenize(prompt)
-        self.cpp_engine.create_sequence(sequence_id, token_ids)
 
-    def generate(self, prompt):
+    def submit(self, prompt):
+        token_ids = self.tokenizer.encode(prompt)
+        request_id = self.cpp_engine.create_request(token_ids)
+        request = Request(request_id, prompt)
+        self.requests[request_id] = request
+        self.cpp_engine.submit_request(request_id)
+        return request_id
+    
+    def get_output(self, request_id):
+        if request_id not in self.requests:
+            raise ValueError(f"Request ID {request_id} not found.")
+        output = self.cpp_engine.get_request_output(request_id)
+        output_text = self.tokenizer.decode(output.token_ids)
+        # at this point, output.token_ids contains both prompt and generated tokens,
+        # request.token_ids contains only prompt tokens,
+        prompt_token_len = len(self.requests[request_id].token_ids)
+        req_output = RequestOutput(
+            request_id, 
+            output.seq_id, 
+            output.token_ids, 
+            output_text,
+            output.token_ids[prompt_token_len:]
+        )
+        self.requests.pop(request_id)
+        return req_output
 
-        sequence_id = max(self.sequences.keys(), default=0) + 1
-
-        self.add_sequence(sequence_id, prompt)
-
-        token_ids = self.cpp_engine.get_sequence_output(sequence_id)
-
-        return self.tokenizer.decode(token_ids)
-
-    def check_sequence_state(self, sequence_id):
-        if sequence_id not in self.sequences:
-            raise ValueError(f"Sequence ID {sequence_id} does not exist.")
-        
-        state = self.cpp_engine.check_sequence_state(sequence_id)
+    def check_request_state(self, request_id):
+        if request_id not in self.requests:
+            raise ValueError(f"Request ID {request_id} not found.")
+        state = self.cpp_engine.check_request_state(request_id)
         return state

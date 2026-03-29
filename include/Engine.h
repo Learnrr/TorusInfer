@@ -1,6 +1,7 @@
 #pragma once
 
 #include "KVCacheManager.h"
+#include "RequestManager.h"
 #include "Workspace.h"
 #include "Scheduler.h"
 #include "Sequence.h"
@@ -12,6 +13,7 @@
 #include "error.h"
 #include "ModelConfig.h"
 #include "llm_engine_config.h"
+#include "SequenceOutput.h"
 class Engine{
     public:
         Engine(const Engine&) = delete;
@@ -34,11 +36,13 @@ class Engine{
 
         void run(); 
 
-        void create_sequence(size_t seq_id, std::vector<size_t> token_ids);
+        void create_request(std::vector<size_t> token_ids, size_t& request_id);
 
-        void get_sequence_output(size_t seq_id, std::vector<size_t>& output_token_ids);
+        void submit_request(size_t request_id);
 
-        void check_sequence_state(size_t seq_id, SequenceState& state);
+        void get_request_output(size_t request_id, SequenceOutput& output);
+
+        void check_request_state(size_t request_id, RequestStatus& state);
 
 
 
@@ -48,6 +52,7 @@ class Engine{
         std::unique_ptr<Scheduler> scheduler;
         std::unique_ptr<KVCacheManager> cache_manager;
         std::unique_ptr<Workspace> workspace;
+        std::unique_ptr<RequestManager> request_manager;
 
         LLMEngineConfig engine_config;
         std::thread runner_thread;

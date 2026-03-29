@@ -31,7 +31,6 @@ void Scheduler::schedule() {
                 ", sequences=" + std::to_string(decode_batch.sequences.size())
             );
             model->decode_forward(decode_batch, *workspace);
-            LOG_DEBUG("Returned from model->decode_forward");
             appendDecodedTokens(decode_batch);
 
             moveDecodingToFinished(decode_batch);
@@ -249,6 +248,7 @@ std::variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
     return batch;
 }
 
+//this will create a new sequence in the scheduler and add it to queue
 ErrorCode Scheduler::addSequence(size_t seq_id, std::vector<size_t> token_ids) {
     auto new_seq = std::make_shared<Sequence>(seq_id);
     new_seq->token_ids = token_ids;
@@ -302,7 +302,6 @@ ErrorCode Scheduler::returnSequenceOutput() {
             }
 
             seq->finish_handled = true;
-
             
         }
     }
