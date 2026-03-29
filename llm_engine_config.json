@@ -1,6 +1,7 @@
 {
-  "max_batch_size": 1,
-  "max_sequence_length": 32768,
+  "max_decode_batch_size": 8,
+  "max_prefill_batch_size": 8,
+  "max_sequence_length": 128,
   "total_cache_size": 536870912,
   "block_size": 16,
   "model_config_path": "/llm_infer_engine/qwen7b_model_config.json"

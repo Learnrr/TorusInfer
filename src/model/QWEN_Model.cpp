@@ -6,7 +6,7 @@
 #include "half_float/half.hpp"
 #include "utils/tensor_debug.h"
 
-void QWEN_Model::init(ModelConfig config) {
+void QWEN_Model::init(LLMEngineConfig& config) {
     this->config = config;
     weights = std::make_unique<ModelWeights>();
     ErrorCode error = weights->init(config);
@@ -17,23 +17,23 @@ void QWEN_Model::init(ModelConfig config) {
 
     // Create embedding layer
     embedding =  std::make_unique<Embedding>(
-        config, 
+        config.model_config, 
         weights->layout.embedding_weights
     );            
     LOG_INFO("Initialized Embedding layer");
     
-    layers.reserve(config.num_hidden_layers + 2); // +2 for layer norm and lm head
+    layers.reserve(config.model_config.num_hidden_layers + 2); // +2 for layer norm and lm head
 
     // Create transformer layers
-    for(size_t i = 0; i < config.num_hidden_layers; ++i) {
-        auto layer_config = config.get_layer_config<TransformerLayerConfig>(i);
+    for(size_t i = 0; i < config.model_config.num_hidden_layers; ++i) {
+        auto layer_config = config.model_config.get_layer_config<TransformerLayerConfig>(i);
         if (layer_config == nullptr) {
             LOG_ERROR("Missing TransformerLayerConfig in model config");
             return;
         }
         while (layer_config->norm_configs.size() < 2) {
             LayerNormLayerConfig norm_cfg;
-            norm_cfg.norm_size = config.hidden_size;
+            norm_cfg.norm_size = config.model_config.hidden_size;
             layer_config->norm_configs.push_back(norm_cfg);
         }
 
@@ -44,8 +44,8 @@ void QWEN_Model::init(ModelConfig config) {
         }
 
         layers.emplace_back(std::make_unique<TransformerLayer>(
-            config.hidden_size, 
-            config.num_heads,
+            config.model_config.hidden_size, 
+            config.model_config.num_heads,
             layer_layout,
             layer_config
         ));
@@ -54,13 +54,13 @@ void QWEN_Model::init(ModelConfig config) {
     LOG_INFO("Initialized all Transformer layers");
     // Create final layer norm
     LayerNormLayerConfig layernorm_config;
-    layernorm_config.norm_size = config.hidden_size;
-    auto layernorm_config_ptr = config.get_layer_config<LayerNormLayerConfig>(config.num_hidden_layers);
+    layernorm_config.norm_size = config.model_config.hidden_size;
+    auto layernorm_config_ptr = config.model_config.get_layer_config<LayerNormLayerConfig>(config.model_config.num_hidden_layers);
     if (layernorm_config_ptr != nullptr) {
         layernorm_config = *layernorm_config_ptr;
     }
 
-    auto layernorm_layout = weights->layout.get_layer_layout<LayerNormLayerWeightLayout>(config.num_hidden_layers);
+    auto layernorm_layout = weights->layout.get_layer_layout<LayerNormLayerWeightLayout>(config.model_config.num_hidden_layers);
     if (layernorm_layout == nullptr) {
         LOG_ERROR("Failed to get final layernorm layout");
         return;
@@ -74,15 +74,15 @@ void QWEN_Model::init(ModelConfig config) {
     LOG_INFO("Initialized final layernorm");
 
     // Create LM head
-    auto lmhead_config = config.get_layer_config<LinearLayerConfig>(config.num_hidden_layers + 1);
-    auto lm_head_layout = weights->layout.get_layer_layout<LinearLayerWeightLayout>(config.num_hidden_layers + 1);
+    auto lmhead_config = config.model_config.get_layer_config<LinearLayerConfig>(config.model_config.num_hidden_layers + 1);
+    auto lm_head_layout = weights->layout.get_layer_layout<LinearLayerWeightLayout>(config.model_config.num_hidden_layers + 1);
     if (lmhead_config == nullptr || lm_head_layout == nullptr) {
         LOG_ERROR("Failed to get LM head config/layout");
         return;
     }
     layers.emplace_back(std::make_unique<Linear>(
         lmhead_config->linear_config, 
-        config.num_hidden_layers + 1, 
+        config.model_config.num_hidden_layers + 1, 
         lm_head_layout->linear_weight
     ));
 
@@ -103,11 +103,11 @@ void QWEN_Model::load_weights(const char* model_path) {
 void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
     // Implement the logic for the prefill forward pass
     LOG_DEBUG("Entered QWEN_Model::prefill_forward");
-    if (!embedding || layers.size() < config.num_hidden_layers + 2) {
+    if (!embedding || layers.size() < config.model_config.num_hidden_layers + 2) {
         std::ostringstream oss;
         oss << "QWEN_Model is not fully initialized before prefill_forward"<<
              " embedding: " << (embedding ? "initialized" : "null") <<
-             " layers: " << layers.size() << "/" << (config.num_hidden_layers + 2);
+             " layers: " << layers.size() << "/" << (config.model_config.num_hidden_layers + 2);
         LOG_ERROR(oss.str());
         return;
     }
@@ -133,27 +133,27 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
     }
 
     Tensor hidden(
-        batch.num_tokens * config.hidden_size, 
+        batch.num_tokens * config.model_config.hidden_size, 
         workspace.get_embedding_workspace(),
-        {batch.num_tokens, config.hidden_size}, 
-        config.data_type
+        {batch.num_tokens, config.model_config.hidden_size}, 
+        config.model_config.data_type
     );
 
     {
         std::ostringstream oss;
         oss << "Running Embedding prefill forward with batch.num_tokens=" << batch.num_tokens <<
-             " hidden_size=" << config.hidden_size <<
-             " data_type=" << static_cast<int>(config.data_type);
+             " hidden_size=" << config.model_config.hidden_size <<
+             " data_type=" << static_cast<int>(config.model_config.data_type);
         LOG_DEBUG(oss.str());
     }
     LOG_DEBUG("Calling embedding->forward in prefill");
     embedding->forward(batch.token_ids, hidden, batch.num_tokens);
     //log_tensor_anomaly(hidden, std::string("after_embedding"));
     Tensor hidden2(
-        batch.num_tokens * config.hidden_size, 
+        batch.num_tokens * config.model_config.hidden_size, 
         workspace.get_hidden2_workspace(),
-        {batch.num_tokens, config.hidden_size}, 
-        config.data_type
+        {batch.num_tokens, config.model_config.hidden_size}, 
+        config.model_config.data_type
     );
 
     ForwardContext context;
@@ -161,15 +161,15 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
     context.workspace = &workspace;
     context.config = &config;
 
-    for(size_t i = 0; i < config.num_hidden_layers; ++i) {
+    for(size_t i = 0; i < config.model_config.num_hidden_layers; ++i) {
         context.layer_id = i;
         LOG_DEBUG("Calling TransformerLayer prefill_forward layer=" + std::to_string(i));
         {
             std::ostringstream oss;
             oss << "Running TransformerLayer " << i << " prefill_forward with batch.num_tokens=" << batch.num_tokens <<
-                 " hidden_size=" << config.hidden_size <<
-                 " num_heads=" << config.num_heads <<
-                 " data_type=" << static_cast<int>(config.data_type);
+                 " hidden_size=" << config.model_config.hidden_size <<
+                 " num_heads=" << config.model_config.num_heads <<
+                 " data_type=" << static_cast<int>(config.model_config.data_type);
             LOG_DEBUG(oss.str());
         }
         layers[i]->prefill_forward(hidden, hidden2, context);
@@ -177,22 +177,22 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
     }
 
     Tensor logits_output(
-        batch.num_tokens * config.vocab_size, 
+        batch.num_tokens * config.model_config.vocab_size, 
         workspace.get_logits_workspace(),
-        {batch.num_tokens, config.vocab_size}, 
-        config.data_type
+        {batch.num_tokens, config.model_config.vocab_size}, 
+        config.model_config.data_type
     );
     
     {
         std::ostringstream oss;
         oss << "Running LM head prefill_forward with batch.num_tokens=" << batch.num_tokens <<
-             " hidden_size=" << config.hidden_size <<
-             " vocab_size=" << config.vocab_size <<
-             " data_type=" << static_cast<int>(config.data_type);
+             " hidden_size=" << config.model_config.hidden_size <<
+             " vocab_size=" << config.model_config.vocab_size <<
+             " data_type=" << static_cast<int>(config.model_config.data_type);
         LOG_DEBUG(oss.str());
     }
-    layers[config.num_hidden_layers]->prefill_forward(hidden, hidden, context);
-    layers[config.num_hidden_layers + 1]->prefill_forward(hidden, logits_output, context);
+    layers[config.model_config.num_hidden_layers]->prefill_forward(hidden, hidden, context);
+    layers[config.model_config.num_hidden_layers + 1]->prefill_forward(hidden, logits_output, context);
     LOG_DEBUG("Finished QWEN_Model::prefill_forward");
 
     

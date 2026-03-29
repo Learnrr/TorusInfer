@@ -8,7 +8,8 @@
 
 class LLMEngineConfig {
 public:
-    size_t max_batch_size = 0;
+    size_t max_decode_batch_size = 0;
+    size_t max_prefill_batch_size = 0;
     size_t max_sequence_length = 0;
     size_t total_cache_size = 0;
     size_t block_size = 0;
@@ -30,7 +31,8 @@ public:
         nlohmann::json config;
         file >> config;
 
-        max_batch_size = config.value("max_batch_size", static_cast<size_t>(16));
+        max_decode_batch_size = config.value("max_decode_batch_size", static_cast<size_t>(16));
+        max_prefill_batch_size = config.value("max_prefill_batch_size", static_cast<size_t>(16));
         max_sequence_length = config.value("max_sequence_length", static_cast<size_t>(1024));
         total_cache_size = config.value("total_cache_size", static_cast<size_t>(1024ULL * 1024ULL * 1024ULL)); // 1GB default
         block_size = config.value("block_size", static_cast<size_t>(16)); // 1KB default

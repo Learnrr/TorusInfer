@@ -1,6 +1,6 @@
 /*
 cd tests
-nvcc -std=c++17 -O2 -DBLOCK_SIZE=16 -I../include -I../include/layer -I../include/layer/activation -I../include/model -I../include/kernel \
+nvcc -std=c++17 -O2 -I../include -I../include/layer -I../include/layer/activation -I../include/model -I../include/kernel \
     test_transformer_layer.cpp ../src/layer/TransformerLayer.cpp ../src/layer/Attention.cpp ../src/layer/MLP.cpp ../src/layer/Linear.cpp \
     ../src/layer/ResidualAdd.cpp ../src/layer/RMSNorm.cpp ../src/layer/activation/SwiGLU.cpp ../src/layer/position/RoPE.cpp ../src/Workspace.cpp \
     ../kernel/projection.cu ../kernel/attention_kernel.cu ../kernel/output_projection_kernel.cu ../kernel/write_kvcache_kernel.cu \
@@ -9,7 +9,6 @@ nvcc -std=c++17 -O2 -DBLOCK_SIZE=16 -I../include -I../include/layer -I../include
 ./../build/tests/test_transformer_layer.exe
 */
 
-#include "layer/TransformerLayer.h"
 #include "Workspace.h"
 #include "llm_engine_config.h"
 
@@ -232,7 +231,7 @@ void RunAndCheckTransformer(bool use_prefill) {
     context.layer_id = 0;
     context.batch = &batch;
     context.workspace = &workspace;
-    context.config = &engine_cfg.model_config;
+    context.config = &engine_cfg;
 
     Tensor input;
     input.data = d_input;

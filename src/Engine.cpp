@@ -30,7 +30,7 @@ void Engine::init(char* llm_engine_config_path) {
     
 
     model = ModelFactory::create_model("QWEN");
-    model->init(engine_config.model_config);
+    model->init(engine_config);
     model->load_weights(engine_config.model_config.model_path.c_str());
 
     scheduler = std::make_unique<Scheduler>(

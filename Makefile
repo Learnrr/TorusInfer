@@ -1,20 +1,25 @@
 
-TARGET := llm_infer$(shell python3-config --extension-suffix)
-SRC_DIR := src 
-CU_DIR := kernel
-INC_DIR := include
-BUILD_DIR := build
+ROOT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+TARGET := $(ROOT_DIR)/llm_infer$(shell python3-config --extension-suffix)
+SRC_DIR := $(ROOT_DIR)/src
+CU_DIR := $(ROOT_DIR)/kernel
+INC_DIR := $(ROOT_DIR)/include
+BUILD_DIR := $(ROOT_DIR)/build
+CUDA_HOME ?= /usr/local/cuda
+CUDA_INC := $(CUDA_HOME)/include
+CUDA_LIB := $(CUDA_HOME)/lib64
 CPPFLAGS := -Wall -fPIC -I$(INC_DIR) -I$(INC_DIR)/layer -I$(INC_DIR)/utils -I$(INC_DIR)/model -I$(INC_DIR)/kernel \
+	-I$(CUDA_INC) \
 	$(shell python3 -m pybind11 --includes)
-NVCCFLAGS := -O2 -Xcompiler -fPIC -I$(INC_DIR) -I$(INC_DIR)/kernel
+NVCCFLAGS := -O2 -Xcompiler -fPIC -I$(INC_DIR) -I$(INC_DIR)/kernel -I$(CUDA_INC)
 LDFLAGS := -shared
 PYTHON := python3
-LDLIBS := $(shell $(PYTHON)-config --ldflags)
+LDLIBS := $(shell $(PYTHON)-config --ldflags) -L$(CUDA_LIB) -lcudart
 CXX := g++
 NVCC := nvcc
 
-SRCS_CPP = $(shell find src -name "*.cpp")
-SRCS_CU = $(shell find kernel -name "*.cu")
+SRCS_CPP = $(shell find $(SRC_DIR) -name "*.cpp")
+SRCS_CU = $(shell find $(CU_DIR) -name "*.cu")
 OBJS_CPP = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS_CPP))
 OBJS_CU = $(patsubst $(CU_DIR)/%.cu,$(BUILD_DIR)/%.o,$(SRCS_CU))
 

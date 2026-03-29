@@ -10,8 +10,8 @@ void MLP::prefill_forward(const Tensor& input, Tensor& output, ForwardContext& c
     const size_t num_tokens = context.batch->num_tokens;
     const size_t intermediate_size = mlp_config.mlp_linears[0].out_features;
     const size_t elem_bytes = Tensor::element_size_bytes(input.dtype);
-    if (context.config && context.config->mlp_intermediate_size > 0
-        && intermediate_size > context.config->mlp_intermediate_size) {
+    if (context.config && context.config->model_config.mlp_intermediate_size > 0
+        && intermediate_size > context.config->model_config.mlp_intermediate_size) {
         LOG_ERROR("MLP intermediate_size exceeds workspace size from model config");
         return;
     }
@@ -61,8 +61,8 @@ void MLP::decode_forward(const Tensor& input, Tensor& output, ForwardContext& co
     const size_t num_tokens = context.batch->num_tokens;
     const size_t intermediate_size = mlp_config.mlp_linears[0].out_features;
     const size_t elem_bytes = Tensor::element_size_bytes(input.dtype);
-    if (context.config && context.config->mlp_intermediate_size > 0
-        && intermediate_size > context.config->mlp_intermediate_size) {
+    if (context.config && context.config->model_config.mlp_intermediate_size > 0
+        && intermediate_size > context.config->model_config.mlp_intermediate_size) {
         LOG_ERROR("MLP intermediate_size exceeds workspace size from model config");
         return;
     }

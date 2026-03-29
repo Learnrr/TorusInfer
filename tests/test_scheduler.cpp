@@ -1,13 +1,12 @@
 /*
 cd tests
-nvcc -std=c++17 -O2 -DBLOCK_SIZE=16 -DMAX_SEQ_LEN=1024 -DMAX_DECODE_BATCH_SIZE=8 -DMAX_PREFILL_BATCH_SIZE=8 \
+nvcc -std=c++17 -O2 \
     -I../ -I../include -I../include/model -I../include/utils \
     test_scheduler.cpp ../src/Scheduler.cpp ../src/KVCacheManager.cpp \
     -o ../build/tests/test_scheduler.exe
 ./../build/tests/test_scheduler.exe
 */
 
-// 真实推理流程测试
 #include "Scheduler.h"
 #include "model/QWEN_Model.h"
 #include "KVCacheManager.h"

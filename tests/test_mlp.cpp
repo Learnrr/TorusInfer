@@ -211,7 +211,7 @@ void RunAndCheckMlp(bool use_prefill) {
     context.layer_id = 0;
     context.batch = &batch;
     context.workspace = &workspace;
-    context.config = &engine_cfg.model_config;
+    context.config = &engine_cfg;
 
     MLP mlp = BuildMlp(d_w_gate, d_w_up, d_w_down, engine_cfg.model_config.data_type);
 

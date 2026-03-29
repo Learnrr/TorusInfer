@@ -30,9 +30,9 @@ void Attention::prefill_forward(
         layer_layout.qkv_proj_weight, 
         qkv, 
         batch_seq_len, 
-        context.config->num_heads, 
-        context.config->num_kv_heads,
-        context.config->head_dim
+        context.config->model_config.num_heads,
+        context.config->model_config.num_kv_heads,
+        context.config->model_config.head_dim
     );
     if (err != ErrorCode::SUCCESS) {
         LOG_ERROR("Failed to project qkv");
@@ -42,9 +42,9 @@ void Attention::prefill_forward(
         + ", weight shape: [" + std::to_string(layer_layout.qkv_proj_weight.shape[0]) + ", " + std::to_string(layer_layout.qkv_proj_weight.shape[1]) + "]"
         + ", qkv shape: [" + std::to_string(qkv.shape[0]) + ", " + std::to_string(qkv.shape[1]) + "]"
         + ", batch_seq_len: " + std::to_string(batch_seq_len)
-        + ", num_heads: " + std::to_string(context.config->num_heads)
-        + ", head_dim: " + std::to_string(context.config->head_dim)
-        + ", num_kv_heads: " + std::to_string(context.config->num_kv_heads)
+        + ", num_heads: " + std::to_string(context.config->model_config.num_heads)
+        + ", head_dim: " + std::to_string(context.config->model_config.head_dim)
+        + ", num_kv_heads: " + std::to_string(context.config->model_config.num_kv_heads)
     );
 
     Tensor q;
@@ -54,9 +54,9 @@ void Attention::prefill_forward(
     err = split_qkv(
         qkv, q, k, v, 
         batch_seq_len, 
-        context.config->num_heads,
-        context.config->num_kv_heads,
-        context.config->head_dim
+        context.config->model_config.num_heads,
+        context.config->model_config.num_kv_heads,
+        context.config->model_config.head_dim
     );
     if (err != ErrorCode::SUCCESS) {
         LOG_ERROR("Failed to split qkv");
@@ -66,9 +66,9 @@ void Attention::prefill_forward(
         + ", k shape: [" + std::to_string(k.shape[0]) + ", " + std::to_string(k.shape[1]) + ", " + std::to_string(k.shape[2]) + "]"
         + ", v shape: [" + std::to_string(v.shape[0]) + ", " + std::to_string(v.shape[1]) + ", " + std::to_string(v.shape[2]) + "]"
         + ", batch_seq_len: " + std::to_string(batch_seq_len)
-        + ", num_heads: " + std::to_string(context.config->num_heads)
-        + ", head_dim: " + std::to_string(context.config->head_dim)
-        + ", num_kv_heads: " + std::to_string(context.config->num_kv_heads)
+        + ", num_heads: " + std::to_string(context.config->model_config.num_heads)
+        + ", head_dim: " + std::to_string(context.config->model_config.head_dim)
+        + ", num_kv_heads: " + std::to_string(context.config->model_config.num_kv_heads)
     );
     if (!rope) {
         LOG_ERROR("rope is nullptr");
@@ -78,9 +78,9 @@ void Attention::prefill_forward(
         q,
         k,
         context,
-        context.config->num_heads,
-        context.config->num_kv_heads,
-        context.config->head_dim
+        context.config->model_config.num_heads,
+        context.config->model_config.num_kv_heads,
+        context.config->model_config.head_dim
     );
     LOG_DEBUG("RoPE applied to q and k");
     //write k and v to blocked cache
@@ -94,10 +94,10 @@ void Attention::prefill_forward(
     //build attention output tensor
     Tensor attn_output;
     attn_output.data = context.workspace->get_attn_context_workspace();
-    attn_output.shape = {batch_seq_len, context.config->num_heads, context.config->head_dim};
+    attn_output.shape = {batch_seq_len, context.config->model_config.num_heads, context.config->model_config.head_dim};
     attn_output.dtype = input.dtype;
     attn_output.device = "gpu";
-    attn_output.num_elements = batch_seq_len * context.config->num_heads * context.config->head_dim;
+    attn_output.num_elements = batch_seq_len * context.config->model_config.num_heads * context.config->model_config.head_dim;
     attn_output.size = attn_output.num_elements * Tensor::element_size_bytes(attn_output.dtype);
     
     // block_ids， block_offsets
@@ -183,12 +183,12 @@ void Attention::prefill_forward(
         d_block_offsets_dev.get(),
         attn_output.data,
         batch_seq_len,
-        context.config->num_hidden_layers,
-        context.config->num_heads,
-        context.config->num_kv_heads,
-        context.config->head_dim,
-        BLOCK_SIZE,
-        context.config->max_seq_len,
+        context.config->model_config.num_hidden_layers,
+        context.config->model_config.num_heads,
+        context.config->model_config.num_kv_heads,
+        context.config->model_config.head_dim,
+        context.config->block_size,
+        context.config->max_sequence_length,
         layer_id,
         q.dtype
     );
@@ -229,9 +229,9 @@ void Attention::decode_forward(
         layer_layout.qkv_proj_weight,  //projection weight
         qkv,                            //output qkv tensor           
         batch_seq_len,                  // batch_seq_len
-        context.config->num_heads,
-        context.config->num_kv_heads,
-        context.config->head_dim
+        context.config->model_config.num_heads,
+        context.config->model_config.num_kv_heads,
+        context.config->model_config.head_dim
     );
 
     if (err != ErrorCode::SUCCESS) {
@@ -242,9 +242,9 @@ void Attention::decode_forward(
         + ", weight shape: [" + std::to_string(layer_layout.qkv_proj_weight.shape[0]) + ", " + std::to_string(layer_layout.qkv_proj_weight.shape[1]) + "]"
         + ", qkv shape: [" + std::to_string(qkv.shape[0]) + ", " + std::to_string(qkv.shape[1]) + "]"
         + ", batch_seq_len: " + std::to_string(batch_seq_len)
-        + ", num_heads: " + std::to_string(context.config->num_heads)
-        + ", head_dim: " + std::to_string(context.config->head_dim)
-        + ", num_kv_heads: " + std::to_string(context.config->num_kv_heads)
+        + ", num_heads: " + std::to_string(context.config->model_config.num_heads)
+        + ", head_dim: " + std::to_string(context.config->model_config.head_dim)
+        + ", num_kv_heads: " + std::to_string(context.config->model_config.num_kv_heads)
     );    
 
     Tensor q;
@@ -254,26 +254,26 @@ void Attention::decode_forward(
     split_qkv(
         qkv, q, k, v, 
         batch_seq_len, 
-        context.config->num_heads, 
-        context.config->num_kv_heads,
-        context.config->head_dim
+        context.config->model_config.num_heads,
+        context.config->model_config.num_kv_heads,
+        context.config->model_config.head_dim
     );
     LOG_DEBUG("split_qkv q shape: [" + std::to_string(q.shape[0]) + ", " + std::to_string(q.shape[1]) + ", " + std::to_string(q.shape[2]) + "]"
         + ", k shape: [" + std::to_string(k.shape[0]) + ", " + std::to_string(k.shape[1]) + ", " + std::to_string(k.shape[2]) + "]"
         + ", v shape: [" + std::to_string(v.shape[0]) + ", " + std::to_string(v.shape[1]) + ", " + std::to_string(v.shape[2]) + "]"
         + ", batch_seq_len: " + std::to_string(batch_seq_len)
-        + ", num_heads: " + std::to_string(context.config->num_heads)
-        + ", head_dim: " + std::to_string(context.config->head_dim)
-        + ", num_kv_heads: " + std::to_string(context.config->num_kv_heads)
+        + ", num_heads: " + std::to_string(context.config->model_config.num_heads)
+        + ", head_dim: " + std::to_string(context.config->model_config.head_dim)
+        + ", num_kv_heads: " + std::to_string(context.config->model_config.num_kv_heads)
     );    
 
     rope->apply(
         q,
         k,
         context,
-        context.config->num_heads,
-        context.config->num_kv_heads,
-        context.config->head_dim
+        context.config->model_config.num_heads,
+        context.config->model_config.num_kv_heads,
+        context.config->model_config.head_dim
     );
     LOG_DEBUG("RoPE applied to q and k");
 
@@ -395,10 +395,10 @@ void Attention::decode_forward(
         LOG_ERROR("Failed to get workspace for attention output");
         return;
     }
-    attn_output.shape = {batch_seq_len, context.config->num_heads, context.config->head_dim};
+    attn_output.shape = {batch_seq_len, context.config->model_config.num_heads, context.config->model_config.head_dim};
     attn_output.dtype = input.dtype;
     attn_output.device = "gpu";
-    attn_output.num_elements = batch_seq_len * context.config->num_heads * context.config->head_dim;
+    attn_output.num_elements = batch_seq_len * context.config->model_config.num_heads * context.config->model_config.head_dim;
     attn_output.size = attn_output.num_elements * Tensor::element_size_bytes(attn_output.dtype);
     size_t layer_id = context.layer_id;
     launch_attention_qk_softmax_pv_kernel_decode(
@@ -411,12 +411,12 @@ void Attention::decode_forward(
         attn_output.data,
         batch_seq_len,
         total_history_tokens,
-        context.config->num_hidden_layers,
-        context.config->num_heads,
-        context.config->num_kv_heads,
-        context.config->head_dim,
-        BLOCK_SIZE,
-        context.config->max_seq_len,
+        context.config->model_config.num_hidden_layers,
+        context.config->model_config.num_heads,
+        context.config->model_config.num_kv_heads,
+        context.config->model_config.head_dim,
+        context.config->block_size,
+        context.config->max_sequence_length,
         layer_id,
         q.dtype
     );
@@ -457,8 +457,8 @@ ErrorCode Attention::write_cache(
         auto seq = batch->sequences[i];
         size_t pos = batch->token_positions[i];
 
-        size_t block_idx = pos / BLOCK_SIZE;
-        size_t offset = pos % BLOCK_SIZE;
+        size_t block_idx = pos / context.config->block_size;
+        size_t offset = pos % context.config->block_size;
 
         h_block_ids[i] = seq->blocks[block_idx]->block_id;
         h_block_offsets[i] = offset;
@@ -516,10 +516,10 @@ ErrorCode Attention::write_cache(
         key.data,
         value.data,
         num_tokens,
-        context.config->num_hidden_layers,
-        context.config->num_kv_heads,
-        context.config->head_dim,
-        BLOCK_SIZE,
+        context.config->model_config.num_hidden_layers,
+        context.config->model_config.num_kv_heads,
+        context.config->model_config.head_dim,
+        context.config->block_size,
         context.layer_id,
         key.dtype
     );
@@ -556,8 +556,8 @@ ErrorCode Attention::build_read_cache(
         auto seq = batch->sequences[i];
         size_t pos = batch->token_positions[i];
 
-        size_t block_idx = pos / BLOCK_SIZE;
-        size_t offset = pos % BLOCK_SIZE;
+        size_t block_idx = pos / context.config->block_size;
+        size_t offset = pos % context.config->block_size;
 
         if (seq == nullptr || block_idx >= seq->blocks.size()) {
             return ErrorCode::INVALID_INPUT;
@@ -610,8 +610,8 @@ ErrorCode Attention::build_decode_read_cache(
 
         for (size_t t = 0; t < len; ++t) {
             //block idx in the sequence
-            size_t block_idx = t / BLOCK_SIZE;
-            size_t offset = t % BLOCK_SIZE;
+            size_t block_idx = t / context.config->block_size;
+            size_t offset = t % context.config->block_size;
             if (block_idx >= seq->blocks.size()) {
                 return ErrorCode::INVALID_INPUT;
             }

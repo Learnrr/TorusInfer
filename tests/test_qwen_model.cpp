@@ -1,6 +1,6 @@
 /*
 cd tests
-nvcc -std=c++17 -O2 -DBLOCK_SIZE=16 -I../include -I../include/model -I../include/layer -I../include/layer/activation -I../include/kernel \
+nvcc -std=c++17 -O2 -I../include -I../include/model -I../include/layer -I../include/layer/activation -I../include/kernel \
     test_qwen_model.cpp ../src/model/IModel.cpp ../src/model/QWEN_Model.cpp ../src/model/ModelWeights.cpp ../src/Workspace.cpp ../src/PostProcessor.cpp \
     ../src/layer/Embedding.cpp ../src/layer/TransformerLayer.cpp ../src/layer/Attention.cpp ../src/layer/MLP.cpp ../src/layer/Linear.cpp \
     ../src/layer/ResidualAdd.cpp ../src/layer/RMSNorm.cpp ../src/layer/activation/SwiGLU.cpp ../src/layer/position/RoPE.cpp \
@@ -10,8 +10,6 @@ nvcc -std=c++17 -O2 -DBLOCK_SIZE=16 -I../include -I../include/model -I../include
     -o ../build/tests/test_qwen_model.exe
 ./../build/tests/test_qwen_model.exe
 */
-
-#include "QWEN_Model.h"
 
 #include "llm_engine_config.h"
 

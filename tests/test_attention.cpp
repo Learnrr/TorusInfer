@@ -1,6 +1,6 @@
 /*
 cd tests
-nvcc -std=c++17 -O2 -DBLOCK_SIZE=16 -I../include -I../include/layer -I \
+nvcc -std=c++17 -O2 -I../include -I../include/layer -I \
     ../include/model -I../include/kernel test_attention.cpp  \
     ../src/layer/Attention.cpp ../src/layer/position/RoPE.cpp  \
     ../src/Workspace.cpp ../kernel/projection.cu ../kernel/attention_kernel.cu  \
@@ -9,7 +9,6 @@ nvcc -std=c++17 -O2 -DBLOCK_SIZE=16 -I../include -I../include/layer -I \
 ./../build/tests/test_attention.exe
 */
 
-#include "layer/Attention.h"
 #include "Workspace.h"
 #include "llm_engine_config.h"
 
@@ -129,7 +128,7 @@ void TestAttentionPrefillForwardWritesCacheAndOutput() {
     context.layer_id = 0;
     context.batch = &batch;
     context.workspace = &workspace;
-    context.config = &engine_cfg.model_config;
+    context.config = &engine_cfg;
 
     AttentionLayerConfig attn_cfg;
     attn_cfg.num_attention_heads = 1;
@@ -266,7 +265,7 @@ void TestAttentionDecodeForwardWritesCacheAndOutput() {
     context.layer_id = 0;
     context.batch = &batch;
     context.workspace = &workspace;
-    context.config = &engine_cfg.model_config;
+    context.config = &engine_cfg;
 
     AttentionLayerConfig attn_cfg;
     attn_cfg.num_attention_heads = 1;
@@ -406,7 +405,7 @@ void TestAttentionMultiTokenPrefillAndDecode() {
     context.layer_id = 0;
     context.batch = &batch;
     context.workspace = &workspace;
-    context.config = &engine_cfg.model_config;
+    context.config = &engine_cfg;
 
     AttentionLayerConfig attn_cfg;
     attn_cfg.num_attention_heads = 1;
@@ -493,7 +492,7 @@ void TestAttentionMultiTokenPrefillAndDecode() {
     context2.layer_id = 0;
     context2.batch = &batch2;
     context2.workspace = &workspace;
-    context2.config = &engine_cfg.model_config;
+    context2.config = &engine_cfg;
 
     Tensor input2;
     input2.data = d_input2;

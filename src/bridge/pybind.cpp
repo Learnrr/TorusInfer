@@ -14,7 +14,14 @@ PYBIND11_MODULE(cpp_engine, m) {
         .def_readwrite("token_ids", &SequenceOutput::token_ids);
 
     py::class_<Engine>(m, "Engine")
-        .def(py::init<>())
+        .def_static(
+            "get_instance",
+            []() -> Engine& {
+                return *Engine::get_instance();
+            },
+            py::return_value_policy::reference,
+            "Get process-wide Engine singleton"
+        )
         .def("init",
              [](Engine& self, const std::string& llm_engine_config_path) {
                  self.init(const_cast<char*>(llm_engine_config_path.c_str()));

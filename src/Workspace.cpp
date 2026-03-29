@@ -5,17 +5,17 @@ ErrorCode Workspace::init(const LLMEngineConfig& engine_config) {
     free();
     size_t datatype = DataTypeBytes(engine_config.model_config.data_type);
 
-    size_t hidden_size = engine_config.model_config.max_seq_len * engine_config.model_config.hidden_size * datatype;
-    size_t qkv_size = engine_config.model_config.max_seq_len * 3 * engine_config.model_config.hidden_size * datatype;
-    size_t attention_norm_size = engine_config.model_config.max_seq_len * engine_config.model_config.hidden_size * datatype;
-    size_t attn_out_size = engine_config.model_config.max_seq_len * engine_config.model_config.hidden_size * datatype;
-    size_t context_size = engine_config.model_config.max_seq_len * engine_config.model_config.hidden_size * datatype;
-    size_t mlp_norm_size = engine_config.model_config.max_seq_len * engine_config.model_config.hidden_size * datatype;
+    size_t hidden_size = engine_config.max_sequence_length * engine_config.model_config.hidden_size * datatype;
+    size_t qkv_size = engine_config.max_sequence_length * 3 * engine_config.model_config.hidden_size * datatype;
+    size_t attention_norm_size = engine_config.max_sequence_length * engine_config.model_config.hidden_size * datatype;
+    size_t attn_out_size = engine_config.max_sequence_length * engine_config.model_config.hidden_size * datatype;
+    size_t context_size = engine_config.max_sequence_length * engine_config.model_config.hidden_size * datatype;
+    size_t mlp_norm_size = engine_config.max_sequence_length * engine_config.model_config.hidden_size * datatype;
     // MLP workspace stores packed [gate | up], so it needs 2 * intermediate_size.
-    size_t mlp_size = engine_config.model_config.max_seq_len * 2 * engine_config.model_config.mlp_intermediate_size * datatype;
-    size_t mlp_out_size = engine_config.model_config.max_seq_len * engine_config.model_config.hidden_size * datatype;
-    size_t logits_size = engine_config.model_config.max_seq_len * engine_config.model_config.vocab_size * datatype;
-    size_t temp_size = engine_config.model_config.max_seq_len * engine_config.model_config.hidden_size * datatype;
+    size_t mlp_size = engine_config.max_sequence_length * 2 * engine_config.model_config.mlp_intermediate_size * datatype;
+    size_t mlp_out_size = engine_config.max_sequence_length * engine_config.model_config.hidden_size * datatype;
+    size_t logits_size = engine_config.max_sequence_length * engine_config.model_config.vocab_size * datatype;
+    size_t temp_size = engine_config.max_sequence_length * engine_config.model_config.hidden_size * datatype;
 
     size_t offset = 0;
     layout.hidden_offset = offset;

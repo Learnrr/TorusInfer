@@ -1,10 +1,24 @@
 #include "Scheduler.h"
 #include "utils/logger.h"
 
+bool Scheduler::hasPendingWorkLocked() const {
+    return !prepared_queue.empty() ||
+           !waiting_queue.empty() ||
+           !prefilling_queue.empty() ||
+           !decoding_queue.empty();
+}
 
 void Scheduler::schedule() {
-    
     while(!stop_requested.load()){
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            queue_cv.wait(lock, [this]() {
+                return stop_requested.load() || hasPendingWorkLocked();
+            });
+            if (stop_requested.load()) {
+                break;
+            }
+        }
 
         launchSequence();
 
@@ -80,12 +94,13 @@ void Scheduler::schedule() {
 
 void Scheduler::request_stop() {
     stop_requested.store(true);
+    queue_cv.notify_all();
 }
 
 ErrorCode Scheduler::moveDecodingToFinished(const Batch& decode_batch) {
     for(auto& seq : decode_batch.sequences){
         if(seq->state == SequenceState::DECODING){
-            if(seq->token_ids.size() >= MAX_SEQ_LEN 
+            if(seq->token_ids.size() >= engine_config.max_sequence_length 
             || seq->token_ids.back() == engine_config.model_config.eos_token_id){
                 seq->state = SequenceState::FINISHED;
                 LOG_DEBUG("Sequence " + std::to_string(seq->seq_id) + " moved to FINISHED state.");
@@ -154,7 +169,7 @@ std::variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
             batch.num_tokens += 1;  
             batch.batch_size++;
 
-            if(seq->seq_len % BLOCK_SIZE == 0){
+            if(seq->seq_len % engine_config.block_size == 0){
                 std::variant<std::shared_ptr<CacheBlock>, ErrorCode> result = cache_manager->allocate_cache_block();
                 if(std::holds_alternative<std::shared_ptr<CacheBlock>>(result)){
                     seq->blocks.push_back(std::get<std::shared_ptr<CacheBlock>>(result));
@@ -163,12 +178,12 @@ std::variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
                 }
             }
             
-            if(batch.batch_size >= MAX_DECODE_BATCH_SIZE){
+            if(batch.batch_size >= engine_config.max_decode_batch_size){
                 break;
             }
         }
     }
-    while(batch.batch_size < MAX_DECODE_BATCH_SIZE && !prefilling_queue.empty()){
+    while(batch.batch_size < engine_config.max_decode_batch_size && !prefilling_queue.empty()){
         auto seq = prefilling_queue.front();
         if(seq->state == SequenceState::PREFILLED){
             prefilling_queue.erase(prefilling_queue.begin());
@@ -187,7 +202,7 @@ std::variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
             batch.num_tokens += 1;
             batch.batch_size++;
 
-            if(seq->seq_len % BLOCK_SIZE == 0){
+            if(seq->seq_len % engine_config.block_size == 0){
                 std::variant<std::shared_ptr<CacheBlock>, ErrorCode> result = cache_manager->allocate_cache_block();
                 if(std::holds_alternative<std::shared_ptr<CacheBlock>>(result)){
                     seq->blocks.push_back(std::get<std::shared_ptr<CacheBlock>>(result));
@@ -226,7 +241,7 @@ std::variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
             LOG_DEBUG("Sequence " + std::to_string(seq->seq_id) + " added to prefill batch with " + std::to_string(seq_len) + " tokens.");
             
             //allocate cache blocks for the sequence prefill
-            size_t num_blocks = (seq->seq_len + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            size_t num_blocks = (seq->seq_len + engine_config.block_size - 1) / engine_config.block_size;
             for(size_t i = 0; i < num_blocks; ++i){
                 auto result = cache_manager->allocate_cache_block();
                 if(std::holds_alternative<std::shared_ptr<CacheBlock>>(result)){
@@ -237,7 +252,7 @@ std::variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
                 }
             }
             LOG_DEBUG("Sequence " + std::to_string(seq->seq_id) + " allocated " + std::to_string(num_blocks) + " cache blocks for prefill.");
-            if(batch.batch_size >= MAX_PREFILL_BATCH_SIZE){
+            if(batch.batch_size >= engine_config.max_prefill_batch_size){
                 break;
             }
 
@@ -258,6 +273,7 @@ ErrorCode Scheduler::addSequence(size_t seq_id, std::vector<size_t> token_ids) {
     std::lock_guard<std::mutex> lock(queue_mutex);
     prepared_queue.push_back(new_seq);
     LOG_DEBUG("Sequence added to prepared queue: " + std::to_string(new_seq->seq_id));
+    queue_cv.notify_one();
     return ErrorCode::SUCCESS;
 }
 

@@ -13,6 +13,7 @@
 #include <variant>
 #include "llm_engine_config.h"
 #include <mutex>
+#include <condition_variable>
 
 class Scheduler{
     public:
@@ -50,6 +51,7 @@ class Scheduler{
         std::vector<std::shared_ptr<Sequence>> finished_queue;
 
         std::mutex queue_mutex;
+        std::condition_variable queue_cv;
 
         KVCacheManager* cache_manager;
         IModel* model;
@@ -65,4 +67,5 @@ class Scheduler{
         ErrorCode launchSequence();
         ErrorCode handleFinishedSequence();
         void appendDecodedTokens(Batch& decode_batch);
+        bool hasPendingWorkLocked() const;
 };
