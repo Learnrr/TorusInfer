@@ -1,4 +1,5 @@
 # llm_infer_engine
+supported model: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
 ## quick start  
 **1. clone to local**  
 `git clone ...`  
