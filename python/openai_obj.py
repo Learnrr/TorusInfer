@@ -20,6 +20,7 @@ class ChatCompletion(BaseModel):
     messages: list[Message]
     temperature: float = 1.0
     top_p: float = 1.0
+    top_k: int | None = 50
     max_tokens: int = 128
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
@@ -33,7 +34,8 @@ class Completion(BaseModel):
     prompt: str
     temperature: float = 1.0
     top_p: float = 1.0
-    max_tokens: int = 2048
+    top_k: int | None = 50
+    max_tokens: int = 128
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
     user: str | None = None

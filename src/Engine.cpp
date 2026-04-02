@@ -13,6 +13,17 @@ void Engine::init(char* llm_engine_config_path) {
     }
     engine_config.build_from_file(llm_engine_config_path);
     LOG_INFO("Engine config loaded and built from file: " + std::string(llm_engine_config_path));
+    LOG_INFO(
+        "EngineConfig - max_decode_batch_size: " + std::to_string(engine_config.max_decode_batch_size) +
+        ", max_prefill_batch_size: " + std::to_string(engine_config.max_prefill_batch_size) +
+        ", max_sequence_length: " + std::to_string(engine_config.max_sequence_length) +
+        ", total_cache_size: " + std::to_string(engine_config.total_cache_size) +
+        ", block_size: " + std::to_string(engine_config.block_size) +
+        ", temperature: " + std::to_string(engine_config.temperature) +
+        ", top_p: " + std::to_string(engine_config.top_p) +
+        ", top_k: " + std::to_string(engine_config.top_k) +
+        ", model_config_path: " + engine_config.model_config_path
+    );
 
     request_manager = std::make_unique<RequestManager>();
     LOG_INFO("RequestManager initialized");
@@ -57,16 +68,34 @@ void Engine::run() {
     LOG_INFO("Scheduler started");
 }   
 
+void Engine::submit_tokens(std::vector<size_t> token_ids, const SequenceConfig& sequence_config, size_t& request_id){
+    request_id = 0;
+    create_request(token_ids, request_id);
+    if(request_id == 0){
+        LOG_ERROR("Failed to create request for token submission");
+        return;
+    }
+    submit_request(request_id, sequence_config);
+}
+
+void Engine::submit_tokens(std::vector<size_t> token_ids, size_t& request_id){
+    SequenceConfig default_config;
+    default_config.temperature = engine_config.temperature;
+    default_config.top_p = engine_config.top_p;
+    default_config.top_k = static_cast<int>(engine_config.top_k);
+    default_config.max_tokens = engine_config.max_sequence_length;
+    submit_tokens(token_ids, default_config, request_id);
+}
+
 //create a request and sequence in manager
+// allocate a request id and sequence id, and store the token ids in request manager
 void Engine::create_request(std::vector<size_t> token_ids, size_t& request_id){
     ErrorCode error = request_manager->create_request(token_ids, request_id);
     if (error != ErrorCode::SUCCESS) {
         request_id = 0;
     }
-
 }
-
-void Engine::submit_request(size_t request_id) {
+void Engine::submit_request(size_t request_id, const SequenceConfig& sequence_config) {
     //submit the request to request manager
     ErrorCode error = request_manager->submit_request(request_id);
     if (error != ErrorCode::SUCCESS) {
@@ -86,9 +115,22 @@ void Engine::submit_request(size_t request_id) {
         request_manager->set_request_status(request_id, RequestStatus::FAILED);
         return;
     }
+    //check input errors
+    if(token_ids.empty() 
+    || token_ids.size() > engine_config.max_sequence_length
+    || token_ids.size() > sequence_config.max_tokens
+    || sequence_config.max_tokens > engine_config.max_sequence_length
+    || sequence_config.max_tokens <=0
+    || sequence_config.temperature < 0.0f
+    || sequence_config.top_p < 0.0f || sequence_config.top_p > 1.0f
+    || sequence_config.top_k <= 0){
+        request_manager->set_request_status(request_id, RequestStatus::FAILED);
+        return;
+    }
+
     //create the sequence corresponding to the request in scheduler
     //at this point the sequence is created corresponding to the sequence id
-    error = scheduler->addSequence(seq_id, token_ids);
+    error = scheduler->addSequence(seq_id, token_ids, sequence_config);
     if (error != ErrorCode::SUCCESS) {
         // Handle error
         request_manager->set_request_status(request_id, RequestStatus::FAILED);

@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from starlette.concurrency import run_in_threadpool
 from python.openai_obj import(
     ChatCompletion,
     ChatCompletionResponse,
@@ -20,8 +21,8 @@ engine = Engine(config_path)
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletion) -> ChatCompletionResponse:
     api_request_obj = chat_completion_to_request(request)
-    request_id = engine.submit(api_request_obj.prompt)
-    output = engine.get_output(request_id)
+    request_id = await run_in_threadpool(engine.submit, api_request_obj.prompt, api_request_obj)
+    output = await run_in_threadpool(engine.get_output, request_id)
     response = request_to_chat_completion_response(api_request_obj, output)
     return response
 
@@ -31,7 +32,7 @@ async def create_chat_completion(request: ChatCompletion) -> ChatCompletionRespo
 @app.post("/v1/completions")
 async def create_completion(request: Completion) -> CompletionResponse:
     api_request_obj = completion_to_request(request)
-    request_id = engine.submit(api_request_obj.prompt)
-    output = engine.get_output(request_id)
+    request_id = await run_in_threadpool(engine.submit, api_request_obj.prompt, api_request_obj)
+    output = await run_in_threadpool(engine.get_output, request_id)
     response = request_to_completion_response(api_request_obj, output)
     return response

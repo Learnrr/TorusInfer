@@ -15,6 +15,16 @@ enum class SequenceState {
     FINISHED
 };
 
+class SequenceConfig {
+    public:
+        float temperature = 1.0f;
+        float top_p = 1.0f;
+        int top_k = 50;
+        size_t max_tokens = 128;
+        float presence_penalty = 0.0f;
+        float frequency_penalty = 0.0f;
+};
+
 class Sequence {
     public:
         size_t seq_id;
@@ -28,6 +38,8 @@ class Sequence {
         std::condition_variable cv;
 
         Sequence(size_t seq_id) : seq_id(seq_id), seq_len(0) {}
+        Sequence(size_t seq_id, SequenceConfig config) : 
+            seq_id(seq_id), seq_len(0), seq_config(config) {}
 
         void add_token(size_t token_id) {
 
@@ -38,6 +50,8 @@ class Sequence {
             seq_len++;
 
         }
+        //sequence level generation parameters
+        SequenceConfig seq_config;
 
         // sequence level metrics
         size_t submitted_time = 0;

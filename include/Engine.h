@@ -33,16 +33,16 @@ class Engine{
             return &instance;
         }
 
+        //build configs and initialize members
         void init(char* llm_engine_config_path);
-
+        //start the scheduler thread
         void run(); 
-
-        void create_request(std::vector<size_t> token_ids, size_t& request_id);
-
-        void submit_request(size_t request_id);
-
+        //public API to submit tokens with sequence config, and get request output
+        void submit_tokens(std::vector<size_t> token_ids, size_t& request_id);
+        void submit_tokens(std::vector<size_t> token_ids, const SequenceConfig& sequence_config, size_t& request_id);
+        //public API to get request output
         void get_request_output(size_t request_id, SequenceOutput& output);
-
+        //public API to check request state
         void check_request_state(size_t request_id, RequestStatus& state);
 
 
@@ -58,6 +58,9 @@ class Engine{
 
         LLMEngineConfig engine_config;
         std::thread runner_thread;
+        //functions to create request and submit request
+        void create_request(std::vector<size_t> token_ids, size_t& request_id);
+        void submit_request(size_t request_id, const SequenceConfig& sequence_config);
 
 
     };

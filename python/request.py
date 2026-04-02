@@ -13,6 +13,7 @@ class APIRequest():
         model, 
         temperature, 
         top_p, 
+        top_k,
         max_tokens, 
         presence_penalty, 
         frequency_penalty, user
@@ -21,6 +22,7 @@ class APIRequest():
         self.model = model
         self.temperature = temperature
         self.top_p = top_p
+        self.top_k = top_k
         self.max_tokens = max_tokens
         self.presence_penalty = presence_penalty
         self.frequency_penalty = frequency_penalty

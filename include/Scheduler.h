@@ -33,7 +33,7 @@ class Scheduler{
         void schedule();
         void request_stop();
     
-        ErrorCode addSequence(size_t seq_id, std::vector<size_t> token_ids);
+        ErrorCode addSequence(size_t seq_id, std::vector<size_t> token_ids, const SequenceConfig& sequence_config = SequenceConfig());
 
         ErrorCode getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq);
 

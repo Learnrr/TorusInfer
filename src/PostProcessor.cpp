@@ -11,7 +11,7 @@
 using half_float::half;
 
 namespace {
-
+// bfloat16 implementation for CPU side processing
 struct bfloat16_host {
     uint16_t bits;
 
@@ -176,17 +176,27 @@ void PostProcessor::process(Tensor& input, ForwardContext& context) {
             continue;
         }
 
+        float seq_temperature = config.temperature;
+        float seq_top_p = config.top_p;
+        size_t seq_top_k = config.top_k;
+        if (seq_idx < context.batch->sequences.size() && context.batch->sequences[seq_idx]) {
+            const auto& seq = context.batch->sequences[seq_idx];
+            seq_temperature = seq->seq_config.temperature;
+            seq_top_p = seq->seq_config.top_p;
+            seq_top_k = static_cast<size_t>(std::max(seq->seq_config.top_k, 1));
+        }
+
         Tensor seq_logits(vocab_size, seq_ptr, {vocab_size}, input.dtype, input.device);
-        apply_temperature(seq_logits, seq_logits, config.temperature);
+        apply_temperature(seq_logits, seq_logits, seq_temperature);
         std::vector<std::pair<size_t, float>> top_k_logits;
-        top_k(seq_logits, top_k_logits, config.top_k);
+        top_k(seq_logits, top_k_logits, seq_top_k);
         apply_softmax(top_k_logits);
         
         const float top1_prob = top_k_logits.empty() ? 0.0f : top_k_logits.front().second;
         const size_t top1_token = top_k_logits.empty() ? 0 : top_k_logits.front().first;
 
         std::vector<std::pair<size_t, float>> top_p_logits;
-        top_p(top_k_logits, top_p_logits, config.top_p, config.top_k);
+        top_p(top_k_logits, top_p_logits, seq_top_p, seq_top_k);
 
         if (top_p_logits.empty() && !top_k_logits.empty()) {
             top_p_logits.push_back(top_k_logits.front());

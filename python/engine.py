@@ -18,14 +18,22 @@ class Engine:
         return
     
 
-    def submit(self, prompt):
+    def submit(self, prompt, api_request=None):
         token_ids = self.tokenizer.encode(prompt)
-        request_id = self.cpp_engine.create_request(token_ids)
+        request_id = 0
+        if api_request is None:
+            request_id = self.cpp_engine.submit_tokens(token_ids)
+        else:
+            sequence_config = self._build_sequence_config(api_request)
+            request_id = self.cpp_engine.submit_tokens(token_ids, sequence_config)
+
+        if request_id == 0:
+            raise ValueError("submit failed, request creation/submission error")
+
         request = Request(request_id, prompt)
         request.token_ids = token_ids
         with self._requests_lock:
             self.requests[request_id] = request
-        self.cpp_engine.submit_request(request_id)
         return request_id
     
     def get_output(self, request_id):
@@ -57,3 +65,13 @@ class Engine:
                 raise ValueError(f"Request ID {request_id} not found.")
         state = self.cpp_engine.check_request_state(request_id)
         return state
+    
+    def _build_sequence_config(self, api_request):
+        cfg = cpp_engine.SequenceConfig()
+        cfg.temperature = float(api_request.temperature if api_request.temperature is not None else 1.0)
+        cfg.top_p = float(api_request.top_p if api_request.top_p is not None else 1.0)
+        cfg.top_k = int(api_request.top_k if api_request.top_k is not None else 50)
+        cfg.max_tokens = int(api_request.max_tokens if api_request.max_tokens is not None else 128)
+        cfg.presence_penalty = float(api_request.presence_penalty if api_request.presence_penalty is not None else 0.0)
+        cfg.frequency_penalty = float(api_request.frequency_penalty if api_request.frequency_penalty is not None else 0.0)
+        return cfg

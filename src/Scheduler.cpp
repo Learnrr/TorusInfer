@@ -103,6 +103,7 @@ ErrorCode Scheduler::moveDecodingToFinished(const Batch& decode_batch) {
     for(auto& seq : decode_batch.sequences){
         if(seq->state == SequenceState::DECODING){
             if(seq->token_ids.size() >= engine_config.max_sequence_length 
+            || seq->token_ids.size() >= seq->seq_config.max_tokens
             || seq->token_ids.back() == engine_config.model_config.eos_token_id){
                 seq->state = SequenceState::FINISHED;
                 LOG_DEBUG("Sequence " + std::to_string(seq->seq_id) + " moved to FINISHED state.");
@@ -229,6 +230,7 @@ std::variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
             }
         }
     }
+    LOG_DEBUG("BUILD DECODE BATCH: batch_size=" + std::to_string(batch.batch_size) + ", num_tokens=" + std::to_string(batch.num_tokens));
     return batch;
 }
 
@@ -278,12 +280,17 @@ std::variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
         }
         ++it;
     }
+    LOG_DEBUG("BUILD PREFILL BATCH: batch_size=" + std::to_string(batch.batch_size) + ", num_tokens=" + std::to_string(batch.num_tokens));
     return batch;
 }
 
 //this will create a new sequence in the scheduler and add it to queue
-ErrorCode Scheduler::addSequence(size_t seq_id, std::vector<size_t> token_ids) {
-    auto new_seq = std::make_shared<Sequence>(seq_id);
+ErrorCode Scheduler::addSequence(
+    size_t seq_id, 
+    std::vector<size_t> token_ids, 
+    const SequenceConfig& sequence_config
+) {
+    auto new_seq = std::make_shared<Sequence>(seq_id, sequence_config);
     new_seq->token_ids = token_ids;
     new_seq->seq_len = token_ids.size();
     new_seq->state = SequenceState::PREPARED;

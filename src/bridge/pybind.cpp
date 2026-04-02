@@ -8,6 +8,15 @@
 namespace py = pybind11;
 
 PYBIND11_MODULE(cpp_engine, m) {
+    py::class_<SequenceConfig>(m, "SequenceConfig")
+        .def(py::init<>())
+        .def_readwrite("temperature", &SequenceConfig::temperature)
+        .def_readwrite("top_p", &SequenceConfig::top_p)
+        .def_readwrite("top_k", &SequenceConfig::top_k)
+        .def_readwrite("max_tokens", &SequenceConfig::max_tokens)
+        .def_readwrite("presence_penalty", &SequenceConfig::presence_penalty)
+        .def_readwrite("frequency_penalty", &SequenceConfig::frequency_penalty);
+
     py::class_<SequenceOutput>(m, "SequenceOutput")
         .def(py::init<>())
         .def_readwrite("seq_id", &SequenceOutput::seq_id)
@@ -29,16 +38,23 @@ PYBIND11_MODULE(cpp_engine, m) {
              py::arg("llm_engine_config_path"),
              "Initialize engine with config path")
         .def("run", &Engine::run, "Start scheduler thread")
-        .def("create_request",
+        .def("submit_tokens",
              [](Engine& self, const std::vector<size_t>& token_ids) {
                  size_t request_id = 0;
-                 self.create_request(token_ids, request_id);
+                 self.submit_tokens(token_ids, request_id);
                  return request_id;
              },
              py::arg("token_ids"),
-             "Create request and return request_id")
-        .def("submit_request", &Engine::submit_request, py::arg("request_id"),
-             "Submit request to scheduler")
+             "Create and submit request with default sampling config")
+        .def("submit_tokens",
+             [](Engine& self, const std::vector<size_t>& token_ids, const SequenceConfig& sequence_config) {
+                 size_t request_id = 0;
+                 self.submit_tokens(token_ids, sequence_config, request_id);
+                 return request_id;
+             },
+             py::arg("token_ids"),
+               py::arg("sequence_config"),
+             "Create and submit request with per-sequence sampling config")
         .def("get_request_output",
              [](Engine& self, size_t request_id) {
                  SequenceOutput output{};
