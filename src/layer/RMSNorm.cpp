@@ -17,7 +17,6 @@ void RMSNorm::prefill_forward(const Tensor& input, Tensor& output, ForwardContex
 	size_t num_tokens = context.batch->num_tokens;
 
 	const void* gamma_ptr = (gamma != nullptr ? gamma : norm_weight.data);
-	
 
 	launch_rmsnorm_kernel(
 		input.data,

@@ -28,6 +28,7 @@ void Attention::prefill_forward(
     err = qkv_projection(
         input, 
         layer_layout.qkv_proj_weight, 
+        layer_layout.qkv_proj_bias,
         qkv, 
         batch_seq_len, 
         context.config->model_config.num_heads,
@@ -45,8 +46,9 @@ void Attention::prefill_forward(
         + ", num_heads: " + std::to_string(context.config->model_config.num_heads)
         + ", head_dim: " + std::to_string(context.config->model_config.head_dim)
         + ", num_kv_heads: " + std::to_string(context.config->model_config.num_kv_heads)
+        + ", input dtype: " + std::to_string(static_cast<int>(input.dtype))
+        + ", weight dtype: " + std::to_string(static_cast<int>(layer_layout.qkv_proj_weight.dtype))
     );
-
     Tensor q;
     Tensor k;
     Tensor v;
@@ -70,10 +72,12 @@ void Attention::prefill_forward(
         + ", head_dim: " + std::to_string(context.config->model_config.head_dim)
         + ", num_kv_heads: " + std::to_string(context.config->model_config.num_kv_heads)
     );
+    //same with HF results here on q, k, v after split
     if (!rope) {
         LOG_ERROR("rope is nullptr");
         return;
     }
+    // correspond to rotary_fn in HF
     rope->apply(
         q,
         k,
@@ -83,6 +87,7 @@ void Attention::prefill_forward(
         context.config->model_config.head_dim,
         context.config->model_config.rope_theta
     );
+
     LOG_DEBUG("RoPE applied to q and k");
     //write k and v to blocked cache
     err = write_cache(context, k, v);
@@ -248,6 +253,7 @@ void Attention::decode_forward(
     err = qkv_projection(
         input,                          //input tensor
         layer_layout.qkv_proj_weight,  //projection weight
+        layer_layout.qkv_proj_bias,    //projection bias
         qkv,                            //output qkv tensor           
         batch_seq_len,                  // batch_seq_len
         context.config->model_config.num_heads,
@@ -475,6 +481,8 @@ ErrorCode Attention::write_cache(
     std::vector<void*> h_vcache_block_ptrs(num_tokens);
 
     for(size_t i = 0; i < num_tokens; ++i) {
+        // for each token, find its target block and offset in the block
+        // and the block's key and value pointers
         Batch* batch = context.batch;
         auto seq = batch->sequences[i];
         size_t pos = batch->token_positions[i];
@@ -538,6 +546,7 @@ ErrorCode Attention::write_cache(
     CudaUniquePtr<void*> d_kcache_block_ptrs(d_kcache_block_ptrs_raw);
     CudaUniquePtr<void*> d_vcache_block_ptrs(d_vcache_block_ptrs_raw);
 
+    //
     launch_write_kvcache_kernel(
         d_kcache_block_ptrs.get(), 
         d_vcache_block_ptrs.get(), 
@@ -566,6 +575,7 @@ ErrorCode Attention::build_read_cache(
     std::vector<void*>& vcache_block_ptrs
 
 ) {
+    // do basic checks
     if (context.batch == nullptr) {
         return ErrorCode::INVALID_INPUT;
     }
@@ -711,33 +721,82 @@ ErrorCode Attention::split_qkv(
     q.size = q_total * elem_bytes;
     k.size = k_total * elem_bytes;
     v.size = v_total * elem_bytes;
+    q.num_elements = q_total;
+    k.num_elements = k_total;
+    v.num_elements = v_total;
     q.shape = {batch_seq_len, num_heads, head_dim};
     k.shape = {batch_seq_len, num_kv_heads, head_dim};
     v.shape = {batch_seq_len, num_kv_heads, head_dim};
     q.dtype = qkv.dtype;
     k.dtype = qkv.dtype;
     v.dtype = qkv.dtype;
+    q.device = qkv.device;
+    k.device = qkv.device;
+    v.device = qkv.device;
     return ErrorCode::SUCCESS;
 }
 
 ErrorCode Attention::qkv_projection(
     const Tensor& input, 
     const Tensor& weight, 
+    const Tensor& bias,
     Tensor& qkv, 
     size_t batch_seq_len, 
     size_t num_heads,
     size_t num_kv_heads, //GHA
     size_t head_dim
 ) {
+    if (input.data == nullptr || weight.data == nullptr || bias.data == nullptr || qkv.data == nullptr) {
+        return ErrorCode::INVALID_INPUT;
+    }
+    if (input.shape.size() != 2 || weight.shape.size() != 2 || bias.shape.size() != 1) {
+        return ErrorCode::INVALID_INPUT;
+    }
+
+    const size_t in_features = num_heads * head_dim;
     size_t qkv_hidden = num_heads * head_dim + 2 * num_kv_heads * head_dim;
+    if (input.shape[1] != in_features) {
+        LOG_ERROR(
+            "qkv_projection input hidden mismatch, input.shape[1]=" + std::to_string(input.shape[1]) +
+            ", expected=" + std::to_string(in_features)
+        );
+        return ErrorCode::INVALID_INPUT;
+    }
+    if (weight.shape[0] != in_features || weight.shape[1] != qkv_hidden) {
+        LOG_ERROR(
+            "qkv_projection weight shape mismatch, got=[" +
+            std::to_string(weight.shape[0]) + "," + std::to_string(weight.shape[1]) +
+            "], expected=[" + std::to_string(in_features) + "," + std::to_string(qkv_hidden) + "]"
+        );
+        return ErrorCode::INVALID_INPUT;
+    }
+    if (bias.shape[0] != qkv_hidden) {
+        LOG_ERROR(
+            "qkv_projection bias shape mismatch, got=[" + std::to_string(bias.shape[0]) +
+            "], expected=[" + std::to_string(qkv_hidden) + "]"
+        );
+        return ErrorCode::INVALID_INPUT;
+    }
+    if (input.dtype != weight.dtype || input.dtype != bias.dtype) {
+        LOG_ERROR(
+            "qkv_projection dtype mismatch, input dtype=" +
+            std::to_string(static_cast<int>(input.dtype)) +
+            ", weight dtype=" + std::to_string(static_cast<int>(weight.dtype)) +
+            ", bias dtype=" + std::to_string(static_cast<int>(bias.dtype))
+        );
+        return ErrorCode::INVALID_INPUT;
+    }
+
     qkv.size = batch_seq_len * qkv_hidden * Tensor::element_size_bytes(input.dtype);
+    qkv.num_elements = batch_seq_len * qkv_hidden;
     qkv.shape = {batch_seq_len, qkv_hidden};
     qkv.dtype = input.dtype;
+    qkv.device = input.device;
 
     launch_projection_kernel(
         input.data, 
         weight.data, 
-        nullptr, 
+        bias.data,
         qkv.data,
         batch_seq_len, 
         num_heads,
@@ -745,6 +804,12 @@ ErrorCode Attention::qkv_projection(
         head_dim,
         input.dtype
     );
+
+    cudaError_t cuda_err = cudaGetLastError();
+    if (cuda_err != cudaSuccess) {
+        LOG_ERROR("qkv_projection kernel launch failed");
+        return ErrorCode::CUDA_FAILURE;
+    }
     return ErrorCode::SUCCESS;
 
 }
@@ -757,12 +822,19 @@ ErrorCode Attention::output_projection(
     if (input.data == nullptr || weight.data == nullptr || output.data == nullptr) {
         return ErrorCode::INVALID_INPUT;
     }
-    if (input.shape.empty()) {
+    if (input.shape.empty() || weight.shape.size() != 2) {
         return ErrorCode::INVALID_INPUT;
     }
     size_t batch_seq_len = input.shape[0];
     size_t num_heads = attention_config.num_attention_heads;
     size_t head_dim = attention_config.head_dim;
+    const size_t hidden = num_heads * head_dim;
+    if (weight.shape[0] != hidden || weight.shape[1] != hidden) {
+        return ErrorCode::INVALID_INPUT;
+    }
+    if (input.dtype != weight.dtype) {
+        return ErrorCode::INVALID_INPUT;
+    }
     launch_output_projection_kernel(
         input.data,
         weight.data,

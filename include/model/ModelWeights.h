@@ -105,6 +105,8 @@ class ModelWeights {
         //concat qkv on cpu
         Tensor concat_qkv(const Tensor& Wq, const Tensor& Wk, const Tensor& Wv);
 
+        Tensor concat_qkv_bias(const Tensor& q_bias, const Tensor& k_bias, const Tensor& v_bias);
+
         //copy from cpu to gpu
         ErrorCode load_weights(const char* weight_path);
 

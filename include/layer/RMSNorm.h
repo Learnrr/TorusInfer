@@ -20,5 +20,5 @@ private:
     LayerNormLayerConfig config;
     Tensor& norm_weight;
     void* gamma = nullptr;
-    static constexpr float kDefaultEps = 1e-5f;
+    static constexpr float kDefaultEps = 1e-6f;
 };

@@ -60,7 +60,9 @@ std::vector<std::string> ResolveSafetensorShards(const std::string& model_path) 
 }
 
 
-ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
+ErrorCode WeightLayout::build_weight_layout(
+    const ModelConfig& config
+) {
     size_t offset = 0;
     const DataType layout_dtype = config.data_type;
     if (weights == nullptr) {
@@ -128,6 +130,19 @@ ErrorCode WeightLayout::build_weight_layout(const ModelConfig& config) {
             {
                 std::ostringstream oss;
                 oss << "  qkv_proj bytes=" << transformer_layout->attention_weights.qkv_proj_weight.size
+                    << ", offset=" << offset;
+                LOG_DEBUG(oss.str());
+            }
+            transformer_layout->attention_weights.qkv_proj_bias = Tensor(
+                q_hidden + 2 * kv_hidden,
+                static_cast<void*>(static_cast<char*>(weights) + offset),
+                {q_hidden + 2 * kv_hidden},
+                layout_dtype
+            );
+            offset += transformer_layout->attention_weights.qkv_proj_bias.size;
+            {
+                std::ostringstream oss;
+                oss << "  qkv_proj bias bytes=" << transformer_layout->attention_weights.qkv_proj_bias.size
                     << ", offset=" << offset;
                 LOG_DEBUG(oss.str());
             }
@@ -351,6 +366,11 @@ ErrorCode ModelWeights::init(const ModelConfig& config){
         LOG_ERROR("Failed to allocate GPU memory for model weights ");
         return ErrorCode::CUDA_FAILURE;
     }
+    cuda_err = cudaMemset(weights, 0, allocated_bytes);
+    if (cuda_err != cudaSuccess) {
+        LOG_ERROR("Failed to zero-initialize GPU memory for model weights");
+        return ErrorCode::CUDA_FAILURE;
+    }
     {
         std::ostringstream oss;
         oss << "cudaMalloc success, ptr=" << weights;
@@ -566,6 +586,44 @@ ErrorCode ModelWeights::build_weight_names(const char* file_name){
 
     return ErrorCode::SUCCESS;
 }
+Tensor ModelWeights::concat_qkv_bias(const Tensor& q_bias, const Tensor& k_bias, const Tensor& v_bias){
+    if (q_bias.shape.size() != 1 || k_bias.shape.size() != 1 || v_bias.shape.size() != 1) {
+        LOG_ERROR("concat_qkv_bias expects 1D tensors");
+        return Tensor();
+    }
+    if (q_bias.dtype != k_bias.dtype || q_bias.dtype != v_bias.dtype) {
+        LOG_ERROR("concat_qkv_bias dtype mismatch");
+        return Tensor();
+    }
+
+    const size_t q_size = q_bias.shape[0];
+    const size_t k_size = k_bias.shape[0];
+    const size_t v_size = v_bias.shape[0];
+
+    const size_t elem_size = Tensor::element_size_bytes(q_bias.dtype);
+    const size_t total_size = (q_size + k_size + v_size) * elem_size;
+
+    Tensor out(
+        q_size + k_size + v_size,
+        nullptr, 
+        {q_size + k_size + v_size}, 
+        q_bias.dtype,
+        "cpu"
+    );
+
+    char* data = new char[out.size];
+    out.data = data;
+
+    const char* q = static_cast<const char*>(q_bias.data);
+    const char* k = static_cast<const char*>(k_bias.data);
+    const char* v = static_cast<const char*>(v_bias.data);
+
+    std::memcpy(data, q, q_size * elem_size);
+    std::memcpy(data + q_size * elem_size, k, k_size * elem_size);
+    std::memcpy(data + (q_size + k_size) * elem_size, v, v_size * elem_size);
+
+    return out;
+}
 //concat qkv on cpu
 Tensor ModelWeights::concat_qkv(const Tensor& Wq, const Tensor& Wk, const Tensor& Wv){
     if (Wq.shape.size() != 2 || Wk.shape.size() != 2 || Wv.shape.size() != 2) {
@@ -626,6 +684,9 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
     Tensor tmp_layer_tensor_q;
     Tensor tmp_layer_tensor_k;
     Tensor tmp_layer_tensor_v;
+    Tensor tmp_layer_tensor_qbias;
+    Tensor tmp_layer_tensor_kbias;
+    Tensor tmp_layer_tensor_vbias;
 
     std::unordered_map<std::string, std::unique_ptr<std::ifstream>> shard_streams;
 
@@ -650,6 +711,9 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
     bool has_q = false;
     bool has_k = false;
     bool has_v = false;
+    bool has_q_bias = false;
+    bool has_k_bias = false;
+    bool has_v_bias = false;
     size_t idx = 0;
     for(const auto& name : weight_names){
         {
@@ -661,6 +725,11 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
 
         std::ifstream* stream = get_stream_for_name(name);
         if (stream == nullptr) {
+            const bool is_bias_name = name.find(".bias") != std::string::npos;
+            if (is_bias_name) {
+                LOG_INFO("Skipping missing optional bias tensor from weight list: " + name);
+                continue;
+            }
             LOG_ERROR("load_weights stream resolve failed");
             return ErrorCode::LOAD_ERROR;
         }
@@ -704,7 +773,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 LOG_ERROR("Transformer layer layout missing");
                 continue;
             }
-            if(name.find("q_proj") != std::string::npos){
+            if(name.find("q_proj.weight") != std::string::npos){
                 if (tmp_layer_tensor_q.data != nullptr) {
                     free(tmp_layer_tensor_q.data);
                     tmp_layer_tensor_q.data = nullptr;
@@ -715,8 +784,18 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
                 tmp_layer_tensor_q = std::move(loaded_q);
                 has_q = true;
-
-            } else if(name.find("k_proj") != std::string::npos){
+            } else if(name.find("q_proj.bias") != std::string::npos){
+                if(tmp_layer_tensor_qbias.data != nullptr){
+                    free(tmp_layer_tensor_qbias.data);
+                    tmp_layer_tensor_qbias.data = nullptr;
+                }
+                Tensor loaded_qbias = load_layer(*stream, name);
+                if(loaded_qbias.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
+                tmp_layer_tensor_qbias = std::move(loaded_qbias);
+                has_q_bias = true;
+            } else if(name.find("k_proj.weight") != std::string::npos){
                 if (tmp_layer_tensor_k.data != nullptr) {
                     free(tmp_layer_tensor_k.data);
                     tmp_layer_tensor_k.data = nullptr;
@@ -727,8 +806,18 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
                 tmp_layer_tensor_k = std::move(loaded_k);
                 has_k = true;
-
-            } else if(name.find("v_proj") != std::string::npos){
+            } else if(name.find("k_proj.bias") != std::string::npos){
+                if(tmp_layer_tensor_kbias.data != nullptr){
+                    free(tmp_layer_tensor_kbias.data);
+                    tmp_layer_tensor_kbias.data = nullptr;
+                }
+                Tensor loaded_kbias = load_layer(*stream, name);
+                if(loaded_kbias.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
+                tmp_layer_tensor_kbias = std::move(loaded_kbias);
+                has_k_bias = true;
+            } else if(name.find("v_proj.weight") != std::string::npos){
                 if (tmp_layer_tensor_v.data != nullptr) {
                     free(tmp_layer_tensor_v.data);
                     tmp_layer_tensor_v.data = nullptr;
@@ -739,8 +828,18 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 }
                 tmp_layer_tensor_v = std::move(loaded_v);
                 has_v = true;
-
-            } else if(name.find("o_proj") != std::string::npos){
+            } else if(name.find("v_proj.bias") != std::string::npos){
+                if(tmp_layer_tensor_vbias.data != nullptr){
+                    free(tmp_layer_tensor_vbias.data);
+                    tmp_layer_tensor_vbias.data = nullptr;
+                }
+                Tensor loaded_vbias = load_layer(*stream, name);
+                if(loaded_vbias.data == nullptr){
+                    return ErrorCode::LOAD_ERROR;
+                }
+                tmp_layer_tensor_vbias = std::move(loaded_vbias);
+                has_v_bias = true;
+            } else if(name.find("o_proj.weight") != std::string::npos){
                 Tensor tmp_layer_tensor = load_layer(*stream, name);
                 if(tmp_layer_tensor.data == nullptr){
                     return ErrorCode::LOAD_ERROR;
@@ -779,6 +878,7 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 free(tmp_layer_tensor.data);
                 tmp_layer_tensor.data = nullptr;
                 log_tensor_anomaly(layer_layout->attention_weights.o_proj_weight, name);
+
             } else if(name.find("gate_proj") != std::string::npos){
                 if (layer_layout->mlp_weights.mlp_linears_weight.size() < 3) {
                     LOG_ERROR("MLP linear layouts are insufficient");
@@ -978,10 +1078,54 @@ ErrorCode ModelWeights::load_weights(const char* weight_path) {
                 LOG_ERROR("Unrecognized weight name, weights may be incomplete");
                 continue;
             }
+            if (has_q_bias && has_k_bias && has_v_bias) {
+                Tensor bias_qkv = concat_qkv_bias(tmp_layer_tensor_qbias, tmp_layer_tensor_kbias, tmp_layer_tensor_vbias);
+                if (bias_qkv.data == nullptr) {
+                    LOG_ERROR("concat_qkv_bias failed");
+                    free(tmp_layer_tensor_qbias.data);
+                    free(tmp_layer_tensor_kbias.data);
+                    free(tmp_layer_tensor_vbias.data);
+                    tmp_layer_tensor_qbias.data = nullptr;
+                    tmp_layer_tensor_kbias.data = nullptr;
+                    tmp_layer_tensor_vbias.data = nullptr;
+                    return ErrorCode::LOAD_ERROR;
+                }
+                cudaError_t copy_bias_err = cudaMemcpy(
+                    layer_layout->attention_weights.qkv_proj_bias.data,
+                    bias_qkv.data,
+                    bias_qkv.size,
+                    cudaMemcpyHostToDevice
+                );
+                if (copy_bias_err != cudaSuccess) {
+                    LOG_ERROR("cudaMemcpy qkv_proj_bias failed");
+                    delete[] static_cast<char*>(bias_qkv.data);
+                    bias_qkv.data = nullptr;
+                    free(tmp_layer_tensor_qbias.data);
+                    free(tmp_layer_tensor_kbias.data);
+                    free(tmp_layer_tensor_vbias.data);
+                    tmp_layer_tensor_qbias.data = nullptr;
+                    tmp_layer_tensor_kbias.data = nullptr;
+                    tmp_layer_tensor_vbias.data = nullptr;
+                    return ErrorCode::CUDA_FAILURE;
+                }
+                delete[] static_cast<char*>(bias_qkv.data);
+                bias_qkv.data = nullptr;
+                free(tmp_layer_tensor_qbias.data);
+                free(tmp_layer_tensor_kbias.data);
+                free(tmp_layer_tensor_vbias.data);
+                tmp_layer_tensor_qbias.data = nullptr;
+                tmp_layer_tensor_kbias.data = nullptr;
+                tmp_layer_tensor_vbias.data = nullptr;
+                has_q_bias = false;
+                has_k_bias = false;
+                has_v_bias = false;
+                log_tensor_anomaly(layer_layout->attention_weights.qkv_proj_bias, std::string("qkv_proj_bias"));
+            }
 
-            if(!(has_q && has_k && has_v)){
+            if (!(has_q && has_k && has_v)) {
                 continue;
             }
+
             //concat Wq, Wk, Wv
             Tensor Wqkv = concat_qkv(tmp_layer_tensor_q, tmp_layer_tensor_k, tmp_layer_tensor_v);
             if (Wqkv.data == nullptr) {

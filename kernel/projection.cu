@@ -58,12 +58,14 @@ __global__ void projection_kernel(
     float sum = 0.0f;
     const T* in_ptr = static_cast<const T*>(input);
     const T* w_ptr = static_cast<const T*>(weight);
+    const T* b_ptr = static_cast<const T*>(bias);
     T* out_ptr = static_cast<T*>(output);
     for (int in_d = 0; in_d < in_features; ++in_d) {
         const float in_val = to_float<T>(in_ptr[token * in_features + in_d]);
         const float w_val = to_float<T>(w_ptr[in_d * out_features + out_col]);
         sum += in_val * w_val;
     }
+    sum += to_float<T>(b_ptr[out_col]);
 
     // Store as [Q_all_tokens][K_all_tokens][V_all_tokens] so split_qkv can view by pointer.
     int dst_idx = 0;

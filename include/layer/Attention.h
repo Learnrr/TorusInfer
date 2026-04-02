@@ -42,6 +42,7 @@ class Attention: public Layer {
         ErrorCode qkv_projection(
             const Tensor& input, 
             const Tensor& weight, 
+            const Tensor& bias,
             Tensor& qkv, 
             size_t batch_seq_len, 
             size_t num_heads, 

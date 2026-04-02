@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cmath>
 #include <numeric>
+#include <sstream>
 #include "half_float/half.hpp"
 #include "utils/logger.h"
 
@@ -161,7 +162,6 @@ void PostProcessor::process(Tensor& input, ForwardContext& context) {
         } else {
             return;
         }
-
         // greedy decode: choose argmax directly 
         if(config.greedy_decode) {
             size_t sampled_token = 0;
@@ -181,7 +181,7 @@ void PostProcessor::process(Tensor& input, ForwardContext& context) {
         std::vector<std::pair<size_t, float>> top_k_logits;
         top_k(seq_logits, top_k_logits, config.top_k);
         apply_softmax(top_k_logits);
-
+        
         const float top1_prob = top_k_logits.empty() ? 0.0f : top_k_logits.front().second;
         const size_t top1_token = top_k_logits.empty() ? 0 : top_k_logits.front().first;
 

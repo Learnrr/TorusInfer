@@ -63,14 +63,14 @@ __global__ void apply_rope_inplace_float_kernel(
     const float s = sinf(angle);
 
     const size_t base = (static_cast<size_t>(token_idx) * num_heads + head_idx) * head_dim;
-    const size_t even_idx = base + (2 * pair_idx);
-    const size_t odd_idx = even_idx + 1;
+    const size_t lo_idx = base + pair_idx;
+    const size_t hi_idx = base + pair_idx + half_dim;
 
-    const float x0 = tensor[even_idx];
-    const float x1 = tensor[odd_idx];
+    const float x0 = tensor[lo_idx];
+    const float x1 = tensor[hi_idx];
 
-    tensor[even_idx] = x0 * c - x1 * s;
-    tensor[odd_idx] = x0 * s + x1 * c;
+    tensor[lo_idx] = x0 * c - x1 * s;
+    tensor[hi_idx] = x0 * s + x1 * c;
 }
 
 template <typename T>
@@ -98,14 +98,14 @@ __global__ void apply_rope_inplace_16bit_kernel(
     const float s = sinf(angle);
 
     const size_t base = (static_cast<size_t>(token_idx) * num_heads + head_idx) * head_dim;
-    const size_t even_idx = base + (2 * pair_idx);
-    const size_t odd_idx = even_idx + 1;
+    const size_t lo_idx = base + pair_idx;
+    const size_t hi_idx = base + pair_idx + half_dim;
 
-    const float x0 = rope_to_float<T>(tensor[even_idx]);
-    const float x1 = rope_to_float<T>(tensor[odd_idx]);
+    const float x0 = rope_to_float<T>(tensor[lo_idx]);
+    const float x1 = rope_to_float<T>(tensor[hi_idx]);
 
-    tensor[even_idx] = rope_from_float<T>(x0 * c - x1 * s);
-    tensor[odd_idx] = rope_from_float<T>(x0 * s + x1 * c);
+    tensor[lo_idx] = rope_from_float<T>(x0 * c - x1 * s);
+    tensor[hi_idx] = rope_from_float<T>(x0 * s + x1 * c);
 }
 
 void launch_apply_rope_inplace(

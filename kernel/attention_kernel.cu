@@ -119,6 +119,7 @@ __global__ void attention_qk_softmax_Pv_kernel(
         for (int j = 0; j < hist_len; ++j) {
             scores[j] /= sum_exp;
         }
+
     }
     __syncthreads();
 
@@ -134,7 +135,9 @@ __global__ void attention_qk_softmax_Pv_kernel(
             + dim;
         float v_val = to_float<T>(v_block[v_offset]);
         out += scores[j] * v_val;
+
     }
+
     int out_offset = token * num_q_heads * head_dim + head * head_dim + dim;
     attn_output[out_offset] = from_float<T>(out);
 }

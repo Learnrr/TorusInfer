@@ -273,7 +273,6 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         }
         layers[i]->decode_forward(hidden, hidden2, context);
         std::swap(hidden.data, hidden2.data);
-        // log_tensor_anomaly(hidden, (std::string("after_transformer_layer_") + std::to_string(i)).c_str());
     }
 
     Tensor logits_output(
@@ -291,7 +290,6 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         LOG_DEBUG(oss.str());
     }
     layers[config.model_config.num_hidden_layers]->decode_forward(hidden, hidden, context);
-    // log_tensor_anomaly(hidden, "after_final_norm");
     layers[config.model_config.num_hidden_layers + 1]->decode_forward(hidden, logits_output, context);
     log_tensor_anomaly(logits_output, "after_lm_head");
 
