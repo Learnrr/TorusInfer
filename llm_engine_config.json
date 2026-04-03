@@ -8,5 +8,11 @@
   "top_p": 0.9,
   "top_k": 50,
   "greedy_decode": true,
+  "world_size": 1,
+  "pipeline_rank": 0,
+  "local_device_id": 0,
+  "stage_start_layer": 0,
+  "stage_end_layer": 28,
   "model_config_path": "/llm_infer_engine/qwen7b_model_config.json"
+  
 }

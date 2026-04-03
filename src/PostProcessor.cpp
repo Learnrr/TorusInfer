@@ -179,11 +179,13 @@ void PostProcessor::process(Tensor& input, ForwardContext& context) {
         float seq_temperature = config.temperature;
         float seq_top_p = config.top_p;
         size_t seq_top_k = config.top_k;
-        if (seq_idx < context.batch->sequences.size() && context.batch->sequences[seq_idx]) {
-            const auto& seq = context.batch->sequences[seq_idx];
+        if (context.seq_pool != nullptr && seq_idx < context.batch->sequence_ids.size()) {
+            const auto seq = context.seq_pool->get(context.batch->sequence_ids[seq_idx]);
+            if (seq) {
             seq_temperature = seq->seq_config.temperature;
             seq_top_p = seq->seq_config.top_p;
             seq_top_k = static_cast<size_t>(std::max(seq->seq_config.top_k, 1));
+            }
         }
 
         Tensor seq_logits(vocab_size, seq_ptr, {vocab_size}, input.dtype, input.device);

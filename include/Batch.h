@@ -1,8 +1,6 @@
 #pragma once
-#include "Sequence.h"
 #include <vector>
 struct Batch {
-    std::vector<std::shared_ptr<Sequence>> sequences;
     std::vector<size_t> token_ids; // Flattened token ids for all sequences in the batch
     std::vector<size_t> sampled_token_ids; // One sampled token per sequence after decode
     size_t num_tokens = 0; // Total number of tokens in the batch
@@ -10,4 +8,7 @@ struct Batch {
     std::vector<size_t> token_positions; // Positions of tokens in the original sequences
     size_t batch_size = 0;
     std::vector<size_t> max_token_positions; // Max token position for each sequence in the batch
+
+    std::vector<size_t> sequence_ids;
+
 };

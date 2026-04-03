@@ -5,6 +5,7 @@
 #include "metrics/MetricCalculator.h"
 #include "Workspace.h"
 #include "Scheduler.h"
+#include "Worker.h"
 #include "Sequence.h"
 #include "IModel.h"
 #include "Tensor.h"
@@ -35,8 +36,11 @@ class Engine{
 
         //build configs and initialize members
         void init(char* llm_engine_config_path);
-        //start the scheduler thread
+        //start the scheduler thread or worker thread
         void run(); 
+
+
+        //=============scheduler side functions==============
         //public API to submit tokens with sequence config, and get request output
         void submit_tokens(std::vector<size_t> token_ids, size_t& request_id);
         void submit_tokens(std::vector<size_t> token_ids, const SequenceConfig& sequence_config, size_t& request_id);
@@ -47,10 +51,14 @@ class Engine{
 
 
 
+
+
     private:
         Engine() = default;
         std::unique_ptr<IModel> model;
         std::unique_ptr<Scheduler> scheduler;
+        std::unique_ptr<Worker> worker;
+
         std::unique_ptr<KVCacheManager> cache_manager;
         std::unique_ptr<Workspace> workspace;
         std::unique_ptr<RequestManager> request_manager;
@@ -61,6 +69,7 @@ class Engine{
         //functions to create request and submit request
         void create_request(std::vector<size_t> token_ids, size_t& request_id);
         void submit_request(size_t request_id, const SequenceConfig& sequence_config);
+        void attach_channel();
 
 
     };

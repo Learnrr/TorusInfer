@@ -10,6 +10,7 @@ nvcc -std=c++17 -O2 -I../include -I../include/layer -I \
 */
 
 #include "Workspace.h"
+#include "SequencePool.h"
 #include "llm_engine_config.h"
 
 #include <cassert>
@@ -116,9 +117,11 @@ void TestAttentionPrefillForwardWritesCacheAndOutput() {
     auto seq = std::make_shared<Sequence>(0);
     seq->seq_len = 1;
     seq->blocks.push_back(std::make_shared<CacheBlock>(0, d_kcache, d_vcache));
+    SequencePool seq_pool;
+    seq_pool.upsert(seq);
 
     Batch batch;
-    batch.sequences.push_back(seq);
+    batch.sequence_ids = {0};
     batch.num_tokens = 1;
     batch.batch_size = 1;
     batch.token_positions = {0};
@@ -127,6 +130,7 @@ void TestAttentionPrefillForwardWritesCacheAndOutput() {
     ForwardContext context;
     context.layer_id = 0;
     context.batch = &batch;
+    context.seq_pool = &seq_pool;
     context.workspace = &workspace;
     context.config = &engine_cfg;
 
@@ -253,9 +257,11 @@ void TestAttentionDecodeForwardWritesCacheAndOutput() {
     auto seq = std::make_shared<Sequence>(1);
     seq->seq_len = 1;
     seq->blocks.push_back(std::make_shared<CacheBlock>(1, d_kcache, d_vcache));
+    SequencePool seq_pool;
+    seq_pool.upsert(seq);
 
     Batch batch;
-    batch.sequences.push_back(seq);
+    batch.sequence_ids = {1};
     batch.num_tokens = 1;
     batch.batch_size = 1;
     batch.token_positions = {0};
@@ -264,6 +270,7 @@ void TestAttentionDecodeForwardWritesCacheAndOutput() {
     ForwardContext context;
     context.layer_id = 0;
     context.batch = &batch;
+    context.seq_pool = &seq_pool;
     context.workspace = &workspace;
     context.config = &engine_cfg;
 
@@ -391,10 +398,11 @@ void TestAttentionMultiTokenPrefillAndDecode() {
     auto seq = std::make_shared<Sequence>(0);
     seq->seq_len = 2;
     seq->blocks.push_back(std::make_shared<CacheBlock>(0, d_kcache, d_vcache));
+    SequencePool seq_pool;
+    seq_pool.upsert(seq);
 
     Batch batch;
-    batch.sequences.push_back(seq);
-    batch.sequences.push_back(seq);
+    batch.sequence_ids = {0, 0};
     batch.num_tokens = 2;
     batch.batch_size = 1;
     // Use distinct cache positions for two tokens to avoid KV overwrite.
@@ -404,6 +412,7 @@ void TestAttentionMultiTokenPrefillAndDecode() {
     ForwardContext context;
     context.layer_id = 0;
     context.batch = &batch;
+    context.seq_pool = &seq_pool;
     context.workspace = &workspace;
     context.config = &engine_cfg;
 
