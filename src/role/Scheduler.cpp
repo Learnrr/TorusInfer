@@ -1,8 +1,9 @@
-#include "Scheduler.h"
+#include "role/Scheduler.h"
 #include "executor/CoordinatorExecutor.h"
 #include "channel/ChannelManager.h"
 #include "utils/logger.h"
 #include "utils/timer.h"
+#include "model/ModelForwardContext.h"
 
 #include <unordered_set>
 
@@ -54,7 +55,8 @@ void Scheduler::schedule() {
                 break;
             }
         }
-
+        // launch new sequences if there are prepared sequences waiting
+        // move them from prepared to waiting queue to wait for prefill
         launchSequence();
 
         bool has_decode_work = false;
@@ -78,7 +80,10 @@ void Scheduler::schedule() {
             }
 
             // model executor in scheduler will coordinate with workers to run the decode batch
-            model_executor->run_decode(decode_batch);
+            ModelForwardContext decode_context;
+            model_executor->run_decode(decode_batch, decode_context);
+
+            // check if decode succeeded before release events in workers
             bool decode_ok = true;
             if (CoordinatorExecutor* coordinator = dynamic_cast<CoordinatorExecutor*>(model_executor.get())) {
                 decode_ok = coordinator->consume_last_forward_ok();
@@ -94,8 +99,9 @@ void Scheduler::schedule() {
             if (CoordinatorExecutor* coordinator = dynamic_cast<CoordinatorExecutor*>(model_executor.get())) {
                 coordinator->run_release_events(decode_batch);
             }
+            //append sampled tokens to sequences in decode batch
             appendDecodedTokens(decode_batch);
-
+            //move finished sequences from decoding queue to finished queue
             moveDecodingToFinished(decode_batch);
         }
 
@@ -119,7 +125,8 @@ void Scheduler::schedule() {
                 return;
             }
             // model executor in scheduler will coordinate with workers to run the prefill batch
-            model_executor->run_prefill(prefill_batch);
+            ModelForwardContext prefill_context;
+            model_executor->run_prefill(prefill_batch, prefill_context);
             bool prefill_ok = true;
             if (CoordinatorExecutor* coordinator = dynamic_cast<CoordinatorExecutor*>(model_executor.get())) {
                 prefill_ok = coordinator->consume_last_forward_ok();

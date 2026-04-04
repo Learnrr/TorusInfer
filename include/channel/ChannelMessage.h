@@ -15,28 +15,40 @@ class ChannelMessage {
 };
 
 enum class ForwardOp : uint8_t {
-    INVALID = 0,
+    UNKNOWN = 0,
     PREFILL = 1,
     DECODE = 2,
     STOP = 3,
     DONE = 4,
-    FREE_SEQ = 5,
-    RELEASE_EVENTS = 6,
-    RELEASE_EVENTS_FAILED = 7
+    FREE_SEQ = 5, //free sequence in kv cache
+    RELEASE_EVENTS = 6, // when scheduler receive the prefill/decode response
+                        // it will send relase events to worker, 
+                        //worker will release the retained cuda events for this batch
 };
 
 struct ForwardMessage : public ChannelMessage {
-    ForwardOp op_type = ForwardOp::INVALID;
+    ForwardOp op_type = ForwardOp::UNKNOWN;
     Batch batch;
-
+    //ipc handle for passing hidden states between pipeline stages on diff GPUs
     bool has_cuda_ipc_handle = false;
+    //event handle for synchronizing when receiving hidden states via IPC
+    // when receiver reading tensor data from sender, sender may not have finished writing
     bool has_cuda_ipc_event_handle = false;
+
+    //offset in bytes from the base address of the workspace 
+    // to the hidden states tensor for cross stage communication
+    size_t cuda_ipc_mem_offset = 0;
     std::array<char, sizeof(cudaIpcMemHandle_t)> cuda_ipc_handle_bytes{};
     std::array<char, sizeof(cudaIpcEventHandle_t)> cuda_ipc_event_handle_bytes{};
 
-    void set_cuda_ipc_handle(const cudaIpcMemHandle_t& handle, const cudaIpcEventHandle_t* event_handle = nullptr) {
+    void set_cuda_ipc_handle(
+        const cudaIpcMemHandle_t& handle,
+        const cudaIpcEventHandle_t* event_handle = nullptr,
+        size_t mem_offset = 0
+    ) {
         std::memcpy(cuda_ipc_handle_bytes.data(), &handle, sizeof(handle));
         has_cuda_ipc_handle = true;
+        cuda_ipc_mem_offset = mem_offset;
 
         if (event_handle) {
             std::memcpy(cuda_ipc_event_handle_bytes.data(), event_handle, sizeof(*event_handle));
@@ -83,8 +95,9 @@ struct ForwardMessage : public ChannelMessage {
             sizeof(batch.num_tokens) +
             sizeof(batch.batch_size) +
             sizeof(has_handle) +
-            cuda_ipc_handle_bytes.size() +
             sizeof(has_event_handle) +
+            sizeof(cuda_ipc_mem_offset) +
+            cuda_ipc_handle_bytes.size() +
             cuda_ipc_event_handle_bytes.size();
 
         std::vector<char> data(total);
@@ -116,6 +129,7 @@ struct ForwardMessage : public ChannelMessage {
         write_scalar(offset, batch.batch_size);
         write_scalar(offset, has_handle);
         write_scalar(offset, has_event_handle);
+        write_scalar(offset, cuda_ipc_mem_offset);
 
         std::memcpy(
             data.data() + offset,
@@ -137,7 +151,7 @@ struct ForwardMessage : public ChannelMessage {
     }
 
     void deserialize(const std::vector<char>& data) override {
-        op_type = ForwardOp::INVALID;
+        op_type = ForwardOp::UNKNOWN;
         batch.token_ids.clear();
         batch.token_positions.clear();
         batch.sampled_token_ids.clear();
@@ -151,6 +165,7 @@ struct ForwardMessage : public ChannelMessage {
         cuda_ipc_handle_bytes.fill(0);
         has_cuda_ipc_event_handle = false;
         cuda_ipc_event_handle_bytes.fill(0);
+        cuda_ipc_mem_offset = 0;
 
 
         auto read_scalar = [&data](size_t& offset, auto& out) -> bool {
@@ -220,6 +235,10 @@ struct ForwardMessage : public ChannelMessage {
         }
         has_cuda_ipc_event_handle = (has_event_handle != 0);
 
+        if (!read_scalar(offset, cuda_ipc_mem_offset)) {
+            return;
+        }
+
         if (offset + cuda_ipc_handle_bytes.size() > data.size()) {
             return;
         }
@@ -243,6 +262,3 @@ struct ForwardMessage : public ChannelMessage {
         }
     }
 };
-
-using TensorMetadata = ForwardMessage;
-using ControlMessage = ForwardMessage;

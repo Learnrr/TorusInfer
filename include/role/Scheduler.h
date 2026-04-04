@@ -2,7 +2,6 @@
 
 #include"Sequence.h"
 #include"define.h"
-#include "KVCacheManager.h"
 #include "executor/Executor.h"
 #include "executor/CoordinatorExecutor.h"
 #include "Batch.h"
@@ -25,12 +24,10 @@ class Scheduler: public Role {
     public:
 
     Scheduler(
-        KVCacheManager* cache_manager,
         IModel* model,
         const LLMEngineConfig& engine_config
     )
-        : cache_manager(cache_manager),
-        seq_pool(std::make_unique<SequencePool>()),
+        : seq_pool(std::make_unique<SequencePool>()),
         model_executor(std::make_unique<CoordinatorExecutor>(model)),
         engine_config(engine_config),
         eos_token_id(engine_config.model_config.eos_token_id) {}
@@ -65,7 +62,6 @@ class Scheduler: public Role {
         std::mutex queue_mutex;
         std::condition_variable queue_cv;
 
-        KVCacheManager* cache_manager;
         std::unique_ptr<Executor> model_executor;
         LLMEngineConfig engine_config;
         size_t eos_token_id;

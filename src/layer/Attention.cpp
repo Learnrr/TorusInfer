@@ -813,11 +813,6 @@ ErrorCode Attention::qkv_projection(
         input.dtype
     );
 
-    cudaError_t cuda_err = cudaGetLastError();
-    if (cuda_err != cudaSuccess) {
-        LOG_ERROR("qkv_projection kernel launch failed");
-        return ErrorCode::CUDA_FAILURE;
-    }
     return ErrorCode::SUCCESS;
 
 }

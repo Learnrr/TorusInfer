@@ -60,7 +60,7 @@ void TestSchedulerEndToEnd() {
     ErrorCode ws_ok = workspace.init(engine_cfg);
     assert(ws_ok == ErrorCode::SUCCESS);
 
-    Scheduler scheduler(&cache_manager, &model, &workspace, engine_cfg);
+    Scheduler scheduler(&model, engine_cfg);
 
     std::vector<size_t> input_tokens = {10, 11};
     ErrorCode add_err = scheduler.addSequence(1, input_tokens);

@@ -29,7 +29,7 @@ bool receive_from_worker(Channel* input, Batch& batch) {
     input->receive(response);
     if (response.op_type != ForwardOp::DONE) {
         LOG_ERROR(
-            "CoordinatorExecutor expected DONE response from worker, got " +
+            "Coordinator expected DONE response from worker, got " +
             std::to_string(static_cast<int>(response.op_type))
         );
         return false;
@@ -44,59 +44,32 @@ bool receive_from_worker(Channel* input, Batch& batch) {
 
 
 
-void CoordinatorExecutor::run_prefill(Batch& batch) {
+void CoordinatorExecutor::run_prefill(Batch& batch, ModelForwardContext& context) {
+    (void)context;
     dispatch_to_worker(to_worker0, ForwardOp::PREFILL, batch);
     last_forward_ok = receive_from_worker(from_worker_last, batch);
 }
 
-void CoordinatorExecutor::run_decode(Batch& batch) {
+void CoordinatorExecutor::run_decode(Batch& batch, ModelForwardContext& context) {
+    (void)context;
     dispatch_to_worker(to_worker0, ForwardOp::DECODE, batch);
     last_forward_ok = receive_from_worker(from_worker_last, batch);
 }
 
 void CoordinatorExecutor::run_free(Batch& batch) {
     dispatch_to_worker(to_worker0, ForwardOp::FREE_SEQ, batch);
-
-    ForwardMessage response;
-    from_worker_last->receive(response);
-    if (response.op_type != ForwardOp::DONE) {
-        LOG_ERROR("CoordinatorExecutor expected DONE response for FREE_SEQ");
-        return;
-    }
+    last_forward_ok = receive_from_worker(from_worker_last, batch);
 }
 
 void CoordinatorExecutor::run_release_events(Batch& batch) {
     dispatch_to_worker(to_worker0, ForwardOp::RELEASE_EVENTS, batch);
-
-    ForwardMessage response;
-    from_worker_last->receive(response);
-    if (response.op_type == ForwardOp::DONE) {
-        return;
-    }
-    if (response.op_type == ForwardOp::RELEASE_EVENTS_FAILED) {
-        LOG_ERROR("CoordinatorExecutor received RELEASE_EVENTS_FAILED for batch_id=" + std::to_string(batch.batch_id));
-        return;
-    }
-    {
-        LOG_ERROR("CoordinatorExecutor expected DONE/RELEASE_EVENTS_FAILED response for RELEASE_EVENTS");
-        return;
-    }
+    last_forward_ok = receive_from_worker(from_worker_last, batch);
 }
 
 void CoordinatorExecutor::run_stop() {
     Batch control_batch;
     dispatch_to_worker(to_worker0, ForwardOp::STOP, control_batch);
-
-    if (from_worker_last == nullptr) {
-        LOG_ERROR("CoordinatorExecutor input channel is null for STOP");
-        return;
-    }
-
-    ForwardMessage response;
-    from_worker_last->receive(response);
-    if (response.op_type != ForwardOp::DONE) {
-        LOG_ERROR("CoordinatorExecutor expected DONE response for STOP");
-    }
+    // best effort stop
 }
 
 bool CoordinatorExecutor::consume_last_forward_ok() {

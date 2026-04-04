@@ -2,6 +2,7 @@
 
 #include "executor/Executor.h"
 #include "model/IModel.h"
+#include "model/ModelForwardContext.h"
 #include "SequencePool.h"
 #include "Workspace.h"
 
@@ -20,12 +21,8 @@ public:
         stage_end_layer(stage_end_layer), 
         seq_pool(seq_pool) {}
 
-    void run_prefill(Batch& batch) override;
-    void run_decode(Batch& batch) override;
-
-
-    void run_prefill(Batch& batch, void* external_hidden_in, void** external_hidden_out = nullptr);
-    void run_decode(Batch& batch, void* external_hidden_in, void** external_hidden_out = nullptr);
+    void run_prefill(Batch& batch, ModelForwardContext& context) override;
+    void run_decode(Batch& batch, ModelForwardContext& context) override;
 
 private:
     IModel* model;

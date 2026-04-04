@@ -19,11 +19,6 @@ class QWEN_Model : public IModel {
     public:
         QWEN_Model() {} 
 
-        using IModel::prefill_forward;
-        using IModel::decode_forward;
-        using IModel::stage_prefill_forward;
-        using IModel::stage_decode_forward;
-
         void init(LLMEngineConfig& config) override;
 
         void prefill_forward(Batch& batch, ModelForwardContext& context) override;

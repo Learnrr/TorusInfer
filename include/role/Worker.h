@@ -39,13 +39,12 @@ class Worker: public Role {
                     );
                 }
                 this->cache_manager = cache_manager;
-               
-            }
+                this->workspace = workspace;
+        }
 
 
         void run() override;
         void work();
-        void request_stop();
         ErrorCode receive(ForwardMessage& message);
         ErrorCode send(const ForwardMessage& message);
 
@@ -56,16 +55,23 @@ class Worker: public Role {
         std::unique_ptr<SequencePool> seq_pool;
         std::unique_ptr<Executor> model_executor;
         LLMEngineConfig engine_config;
+        Workspace* workspace;
 
+        // Communication channels
         Channel* from_scheduler = nullptr;
         Channel* to_scheduler = nullptr;
         Channel* from_prev_worker = nullptr;
         Channel* to_next_worker = nullptr;
 
         std::unordered_map<size_t, cudaEvent_t> retained_outgoing_events;
-    std::atomic<bool> stop_requested{false};
+        std::atomic<bool> stop_requested{false};
 
         void freeFinishedSequencesOnWorkers(const std::vector<size_t>& sequence_ids);
         void cleanup_retained_events();
+        void setdevice();
+        void allocate_blocks(ForwardMessage& message);
+        void handle_remote_forward(ForwardMessage& message, void** external_hidden_out);
+        void handle_local_forward(ForwardMessage& message);
+        void build_response_and_send(ForwardMessage& message, void* external_hidden_out);
 
 };

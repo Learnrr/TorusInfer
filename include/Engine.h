@@ -4,16 +4,16 @@
 #include "RequestManager.h"
 #include "metrics/MetricCalculator.h"
 #include "Workspace.h"
-#include "Scheduler.h"
-#include "Worker.h"
+#include "role/Scheduler.h"
+#include "role/Worker.h"
 #include "Sequence.h"
-#include "IModel.h"
+#include "model/IModel.h"
 #include "Tensor.h"
 #include "define.h"
 #include <vector>
 #include <thread>
 #include "error.h"
-#include "ModelConfig.h"
+#include "model/ModelConfig.h"
 #include "llm_engine_config.h"
 #include "SequenceOutput.h"
 class Engine{
@@ -23,9 +23,6 @@ class Engine{
         ~Engine() {
             if (scheduler) {
                 scheduler->request_stop();
-            }
-            if (worker) {
-                worker->request_stop();
             }
             if (runner_thread.joinable()) {
                 runner_thread.join();

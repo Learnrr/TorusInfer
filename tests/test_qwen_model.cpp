@@ -148,7 +148,10 @@ void TestQwenPrefillAndDecodeWithRealWeights() {
     prefill_batch.token_positions = {0};
     prefill_batch.batch_size = 1;
 
-    model.prefill_forward(prefill_batch, workspace, &seq_pool);
+    ModelForwardContext prefill_context;
+    prefill_context.workspace = &workspace;
+    prefill_context.seq_pool = &seq_pool;
+    model.prefill_forward(prefill_batch, prefill_context);
     assert(cudaGetLastError() == cudaSuccess);
     assert(cudaDeviceSynchronize() == cudaSuccess);
 
@@ -160,7 +163,10 @@ void TestQwenPrefillAndDecodeWithRealWeights() {
     decode_batch.batch_size = 1;
 
     seq->seq_len = 2;
-    model.decode_forward(decode_batch, workspace, &seq_pool);
+    ModelForwardContext decode_context;
+    decode_context.workspace = &workspace;
+    decode_context.seq_pool = &seq_pool;
+    model.decode_forward(decode_batch, decode_context);
     assert(cudaGetLastError() == cudaSuccess);
     assert(cudaDeviceSynchronize() == cudaSuccess);
 

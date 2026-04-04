@@ -4,6 +4,8 @@
 #include "model/IModel.h"
 #include "SequencePool.h"
 #include "Workspace.h"
+#include "Batch.h"
+#include "model/ModelForwardContext.h"
 
 class SingleCardExecutor : public Executor {
 public:
@@ -16,15 +18,8 @@ public:
         workspace(workspace), 
         seq_pool(seq_pool) {}
 
-    void run_prefill(Batch& batch) override{
-        run_prefill(batch, workspace);
-    }
-    void run_decode(Batch& batch) override{
-        run_decode(batch, workspace);
-    }
-
-    void run_prefill(Batch& batch, Workspace* workspace);
-    void run_decode(Batch& batch, Workspace* workspace);
+    void run_prefill(Batch& batch, ModelForwardContext& context) override;
+    void run_decode(Batch& batch, ModelForwardContext& context) override;
 
 private:
     IModel* model;

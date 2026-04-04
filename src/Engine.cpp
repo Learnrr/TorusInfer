@@ -1,6 +1,6 @@
 #include "Engine.h"
 #include<vector>
-#include "Scheduler.h"
+#include "role/Scheduler.h"
 #include <cstdlib>
 #include <string>
 #include <sstream>
@@ -20,8 +20,8 @@ void Engine::init(char* llm_engine_config_path) {
         LOG_ERROR("Failed to build engine config from file: " + std::string(llm_engine_config_path));
         return;
     }
-    LOG_INFO("Engine config loaded and built from file: " + std::string(llm_engine_config_path));
     LOG_INFO(
+        "Engine config loaded and built from file:" + std::string(llm_engine_config_path) +
         "EngineConfig - max_decode_batch_size: " + std::to_string(engine_config.max_decode_batch_size) +
         ", max_prefill_batch_size: " + std::to_string(engine_config.max_prefill_batch_size) +
         ", max_sequence_length: " + std::to_string(engine_config.max_sequence_length) +
@@ -30,7 +30,13 @@ void Engine::init(char* llm_engine_config_path) {
         ", temperature: " + std::to_string(engine_config.temperature) +
         ", top_p: " + std::to_string(engine_config.top_p) +
         ", top_k: " + std::to_string(engine_config.top_k) +
-        ", model_config_path: " + engine_config.model_config_path
+        ", model_config_path: " + engine_config.model_config_path +
+        ", greedy_decode: " + (engine_config.greedy_decode ? "true" : "false") +
+        ", role: " + engine_config.role +
+        ", enable_pipeline_parallel: " + (engine_config.enable_pipeline_parallel ? "true" : "false") +
+        ", world_size: " + std::to_string(engine_config.world_size) +
+        ", pipeline_rank: " + std::to_string(engine_config.pipeline_rank) +
+        ", local_device_id: " + std::to_string(engine_config.local_device_id)
     );    
 
     // build channels for the pipeline based on the engine configuration.
@@ -48,13 +54,6 @@ void Engine::init(char* llm_engine_config_path) {
         
         request_manager = std::make_unique<RequestManager>();
         LOG_INFO("RequestManager initialized");
-        cache_manager = std::make_unique<KVCacheManager>();
-        ErrorCode error = cache_manager->init(engine_config);
-        if (error != ErrorCode::SUCCESS) {
-            // Handle initialization error
-            return;
-        }
-        LOG_INFO("KVCacheManager initialized"); 
 
         //create model and load weights
         model = ModelFactory::create_model("QWEN");
@@ -62,7 +61,6 @@ void Engine::init(char* llm_engine_config_path) {
         
         //scheduler
         scheduler = std::make_unique<Scheduler>(
-            cache_manager.get(), 
             model.get(),
             engine_config
         );
@@ -142,7 +140,7 @@ void Engine::run() {
     }
 }   
 
-// scheduler side functions
+//================= scheduler side functions==========================
 void Engine::submit_tokens(std::vector<size_t> token_ids, const SequenceConfig& sequence_config, size_t& request_id){
     request_id = 0;
     create_request(token_ids, request_id);

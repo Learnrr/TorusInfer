@@ -21,8 +21,8 @@ public:
         this->to_worker_last = to_worker_last;
     }
 
-    void run_prefill(Batch& batch) override;
-    void run_decode(Batch& batch) override;
+    void run_prefill(Batch& batch, ModelForwardContext& context) override;
+    void run_decode(Batch& batch, ModelForwardContext& context) override;
     void run_free(Batch& batch);
     void run_release_events(Batch& batch);
     void run_stop();

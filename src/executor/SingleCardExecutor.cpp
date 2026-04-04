@@ -1,9 +1,15 @@
 #include "executor/SingleCardExecutor.h"
 
-void SingleCardExecutor::run_prefill(Batch& batch, Workspace* workspace) {
-    model->prefill_forward(batch, *workspace, seq_pool);
+void SingleCardExecutor::run_prefill(Batch& batch, ModelForwardContext& context) {
+    if (context.workspace == nullptr) {
+        return;
+    }
+    model->prefill_forward(batch, context);
 }
 
-void SingleCardExecutor::run_decode(Batch& batch, Workspace* workspace) {
-    model->decode_forward(batch, *workspace, seq_pool);
+void SingleCardExecutor::run_decode(Batch& batch, ModelForwardContext& context) {
+    if (context.workspace == nullptr) {
+        return;
+    }
+    model->decode_forward(batch, context);
 }
