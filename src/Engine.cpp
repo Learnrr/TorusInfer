@@ -1,9 +1,13 @@
 #include "Engine.h"
 #include<vector>
-#include "Scheduler.h"
+#include "role/Scheduler.h"
 #include <cstdlib>
 #include <string>
+#include <sstream>
 #include "utils/logger.h"
+#include <cuda_runtime.h>
+#include "channel/ChannelManager.h"
+#include "channel/Channel.h"
 
 
 void Engine::init(char* llm_engine_config_path) {
@@ -11,9 +15,13 @@ void Engine::init(char* llm_engine_config_path) {
     if (env_log_level && env_log_level[0] != '\0') {
         LOG_INFO(std::string("LOG_LEVEL set to ") + env_log_level);
     }
-    engine_config.build_from_file(llm_engine_config_path);
-    LOG_INFO("Engine config loaded and built from file: " + std::string(llm_engine_config_path));
+    ErrorCode error = engine_config.build_from_file(llm_engine_config_path);
+    if (error != ErrorCode::SUCCESS) {
+        LOG_ERROR("Failed to build engine config from file: " + std::string(llm_engine_config_path));
+        return;
+    }
     LOG_INFO(
+        "Engine config loaded and built from file:" + std::string(llm_engine_config_path) +
         "EngineConfig - max_decode_batch_size: " + std::to_string(engine_config.max_decode_batch_size) +
         ", max_prefill_batch_size: " + std::to_string(engine_config.max_prefill_batch_size) +
         ", max_sequence_length: " + std::to_string(engine_config.max_sequence_length) +
@@ -22,52 +30,117 @@ void Engine::init(char* llm_engine_config_path) {
         ", temperature: " + std::to_string(engine_config.temperature) +
         ", top_p: " + std::to_string(engine_config.top_p) +
         ", top_k: " + std::to_string(engine_config.top_k) +
-        ", model_config_path: " + engine_config.model_config_path
+        ", model_config_path: " + engine_config.model_config_path +
+        ", greedy_decode: " + (engine_config.greedy_decode ? "true" : "false") +
+        ", role: " + engine_config.role +
+        ", enable_pipeline_parallel: " + (engine_config.enable_pipeline_parallel ? "true" : "false") +
+        ", world_size: " + std::to_string(engine_config.world_size) +
+        ", pipeline_rank: " + std::to_string(engine_config.pipeline_rank) +
+        ", local_device_id: " + std::to_string(engine_config.local_device_id)
+    );    
+
+    // build channels for the pipeline based on the engine configuration.
+    ErrorCode channel_error = ChannelManager::get_instance()->build_channels(
+        engine_config.role,
+        engine_config.world_size,
+        engine_config.pipeline_rank
     );
-
-    request_manager = std::make_unique<RequestManager>();
-    LOG_INFO("RequestManager initialized");
-
-    cache_manager = std::make_unique<KVCacheManager>();
-    ErrorCode error = cache_manager->init(engine_config);
-    if (error != ErrorCode::SUCCESS) {
-        // Handle initialization error
+    if (channel_error != ErrorCode::SUCCESS) {
+        LOG_ERROR("Failed to build channels for the pipeline.");
         return;
     }
-    LOG_INFO("KVCacheManager initialized");
+    //scheduler view
+    if(engine_config.role == "scheduler"){
+        
+        request_manager = std::make_unique<RequestManager>();
+        LOG_INFO("RequestManager initialized");
 
-    workspace = std::make_unique<Workspace>();
-    error = workspace->init(engine_config);
-    if (error != ErrorCode::SUCCESS) {
-        // Handle workspace initialization error
+        //create model and load weights
+        model = ModelFactory::create_model("QWEN");
+        model->init(engine_config);
+        
+        //scheduler
+        scheduler = std::make_unique<Scheduler>(
+            model.get(),
+            engine_config
+        );
+
+        //attach communication channels with workers
+        attach_channel();
+        LOG_INFO("Scheduler initialized");
+        metric_calculator = std::make_unique<MetricCalculator>();
+        LOG_INFO("MetricCalculator initialized");   
+
+        LOG_INFO("Engine initialized with role: scheduler");
+    } else if(engine_config.role == "worker"){
+        //set CUDA device for worker only
+        cudaError_t set_device_error = cudaSetDevice(engine_config.local_device_id);
+        if (set_device_error != cudaSuccess) {
+            LOG_ERROR(
+                "Failed to set CUDA device to " + std::to_string(engine_config.local_device_id) +
+                ": " + std::string(cudaGetErrorString(set_device_error))
+            );
+            return;
+        }
+        LOG_INFO("CUDA device set to " + std::to_string(engine_config.local_device_id));
+
+        // build kvcachemanager for worker
+        //only worker has kvcachemanager
+        cache_manager = std::make_unique<KVCacheManager>();
+        ErrorCode error = cache_manager->init(engine_config);
+        if (error != ErrorCode::SUCCESS) {
+            // Handle initialization error
+            return;
+        }
+        LOG_INFO("KVCacheManager initialized");     
+
+        workspace = std::make_unique<Workspace>();
+        error = workspace->init(engine_config);
+        if (error != ErrorCode::SUCCESS) {
+            // Handle workspace initialization error
+            return;
+        }
+        LOG_INFO("Workspace initialized");        
+
+        //create model and load weights
+        model = ModelFactory::create_model("QWEN");
+        model->init(engine_config);
+        model->load_weights(engine_config.model_config.model_path.c_str());
+        LOG_INFO("Model weights loaded");   
+
+        //worker setup
+        worker = std::make_unique<Worker>(
+            cache_manager.get(),
+            model.get(),
+            workspace.get(),
+            engine_config
+        );
+        LOG_INFO("Worker initialized");        
+
+        //attach communication channels with scheduler and other workers
+        attach_channel();
+        LOG_INFO("Engine initialized with role: worker");    
+    } else {
+        LOG_ERROR("Invalid role specified in engine config: " + engine_config.role);
         return;
     }
-    LOG_INFO("Workspace initialized");
-
-
-    model = ModelFactory::create_model("QWEN");
-    model->init(engine_config);
-    model->load_weights(engine_config.model_config.model_path.c_str());
-    LOG_INFO("Model weights loaded");
-
-
-    scheduler = std::make_unique<Scheduler>(
-        cache_manager.get(), 
-        model.get(), 
-        workspace.get(),
-        engine_config
-    );
-    LOG_INFO("Scheduler initialized");
-
-    metric_calculator = std::make_unique<MetricCalculator>();
-    LOG_INFO("MetricCalculator initialized");
+    
 }
 
 void Engine::run() {
-    runner_thread = std::thread(&Scheduler::schedule, scheduler.get());
-    LOG_INFO("Scheduler started");
+    if(engine_config.role == "scheduler"){
+        runner_thread = std::thread(&Scheduler::run, scheduler.get());
+        LOG_INFO("Scheduler started");
+    } else if(engine_config.role == "worker"){
+        runner_thread = std::thread(&Worker::run, worker.get());
+        LOG_INFO("Worker started");
+    } else {
+        LOG_ERROR("Invalid role specified in engine config: " + engine_config.role);
+        return;
+    }
 }   
 
+//================= scheduler side functions==========================
 void Engine::submit_tokens(std::vector<size_t> token_ids, const SequenceConfig& sequence_config, size_t& request_id){
     request_id = 0;
     create_request(token_ids, request_id);
@@ -178,5 +251,16 @@ void Engine::check_request_state(size_t request_id, RequestStatus& state) {
     ErrorCode error = request_manager->get_request_status(request_id, state);
     if (error != ErrorCode::SUCCESS) {
         state = RequestStatus::FAILED;
+    }
+}
+
+void Engine::attach_channel() {
+    if (engine_config.role == "scheduler" && scheduler) {
+        scheduler->set_channels();
+        return;
+    }
+
+    if (engine_config.role == "worker" && worker) {
+        worker->set_channels();
     }
 }

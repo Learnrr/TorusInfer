@@ -12,6 +12,7 @@ nvcc -std=c++17 -O2 -I../include -I../include/model -I../include/layer -I../incl
 */
 
 #include "llm_engine_config.h"
+#include "SequencePool.h"
 
 #include <cassert>
 #include <filesystem>
@@ -137,27 +138,35 @@ void TestQwenPrefillAndDecodeWithRealWeights() {
     auto seq = std::make_shared<Sequence>(0);
     seq->seq_len = 1;
     seq->blocks.push_back(std::make_shared<CacheBlock>(0, d_kcache, d_vcache));
+    SequencePool seq_pool;
+    seq_pool.upsert(seq);
 
     Batch prefill_batch;
-    prefill_batch.sequences.push_back(seq);
+    prefill_batch.sequence_ids = {0};
     prefill_batch.token_ids = {1};
     prefill_batch.num_tokens = 1;
     prefill_batch.token_positions = {0};
     prefill_batch.batch_size = 1;
 
-    model.prefill_forward(prefill_batch, workspace);
+    ModelForwardContext prefill_context;
+    prefill_context.workspace = &workspace;
+    prefill_context.seq_pool = &seq_pool;
+    model.prefill_forward(prefill_batch, prefill_context);
     assert(cudaGetLastError() == cudaSuccess);
     assert(cudaDeviceSynchronize() == cudaSuccess);
 
     Batch decode_batch;
-    decode_batch.sequences.push_back(seq);
+    decode_batch.sequence_ids = {0};
     decode_batch.token_ids = {2};
     decode_batch.num_tokens = 1;
     decode_batch.token_positions = {1};
     decode_batch.batch_size = 1;
 
     seq->seq_len = 2;
-    model.decode_forward(decode_batch, workspace);
+    ModelForwardContext decode_context;
+    decode_context.workspace = &workspace;
+    decode_context.seq_pool = &seq_pool;
+    model.decode_forward(decode_batch, decode_context);
     assert(cudaGetLastError() == cudaSuccess);
     assert(cudaDeviceSynchronize() == cudaSuccess);
 

@@ -21,13 +21,20 @@ class QWEN_Model : public IModel {
 
         void init(LLMEngineConfig& config) override;
 
-        void prefill_forward(Batch& batch, Workspace& workspace) override;
+        void prefill_forward(Batch& batch, ModelForwardContext& context) override;
 
-        void decode_forward(Batch& batch, Workspace& workspace) override;
+        void decode_forward(Batch& batch, ModelForwardContext& context) override;
 
         void load_weights(const char* model_path) override;
 
+        void stage_prefill_forward(Batch& batch, ModelForwardContext& context) override;
+        void stage_decode_forward(Batch& batch, ModelForwardContext& context) override;
+
     private:
+        size_t stage_start_layer = 0;
+        size_t stage_end_layer = 0;
+        bool is_first_stage = true;
+        bool is_last_stage = true;
      
         std::unique_ptr<Embedding> embedding;
         std::unique_ptr<ModelWeights> weights;

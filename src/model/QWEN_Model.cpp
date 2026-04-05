@@ -8,6 +8,19 @@
 
 void QWEN_Model::init(LLMEngineConfig& config) {
     this->config = config;
+    stage_start_layer = config.stage_start_layer;
+    stage_end_layer = config.stage_end_layer;
+    is_first_stage = config.is_first_stage();
+    is_last_stage = config.is_last_stage();
+
+    {
+        std::ostringstream oss;
+        oss << "QWEN stage assignment: stage_layers=[" << stage_start_layer << ", " << stage_end_layer
+            << "), is_first_stage=" << (is_first_stage ? "true" : "false")
+            << ", is_last_stage=" << (is_last_stage ? "true" : "false");
+        LOG_INFO(oss.str());
+    }
+
     weights = std::make_unique<ModelWeights>();
     ErrorCode error = weights->init(config.model_config);
     if (error != ErrorCode::SUCCESS) {
@@ -100,7 +113,13 @@ void QWEN_Model::load_weights(const char* model_path) {
         LOG_ERROR("Failed to load model weights");
     }
 }
-void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
+void QWEN_Model::prefill_forward(Batch& batch, ModelForwardContext& model_context) {
+    if (model_context.workspace == nullptr) {
+        LOG_ERROR("QWEN_Model::prefill_forward received null workspace in context");
+        return;
+    }
+    Workspace& workspace = *model_context.workspace;
+    SequencePool* seq_pool = model_context.seq_pool;
     // Implement the logic for the prefill forward pass
     LOG_DEBUG("Entered QWEN_Model::prefill_forward");
     if (!embedding || layers.size() < config.model_config.num_hidden_layers + 2) {
@@ -122,12 +141,12 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
     if (batch.num_tokens == 0 
         || batch.token_ids.size() != batch.num_tokens 
         || batch.token_positions.size() != batch.num_tokens 
-        || batch.sequences.size() != batch.num_tokens) {
+        || batch.sequence_ids.size() != batch.num_tokens) {
         std::ostringstream oss;
         oss << "Invalid prefill batch: num_tokens=" << batch.num_tokens
             << " token_ids=" << batch.token_ids.size()
             << " token_positions=" << batch.token_positions.size()
-            << " sequences=" << batch.sequences.size();
+            << " sequence_ids=" << batch.sequence_ids.size();
         LOG_ERROR(oss.str());
         return;
     }
@@ -156,8 +175,9 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
         config.model_config.data_type
     );
 
-    ForwardContext context;
+    LayerForwardContext context;
     context.batch = &batch;
+    context.seq_pool = seq_pool;
     context.workspace = &workspace;
     context.config = &config;
 
@@ -198,7 +218,13 @@ void QWEN_Model::prefill_forward(Batch& batch, Workspace& workspace) {
     
 }
 
-void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
+void QWEN_Model::decode_forward(Batch& batch, ModelForwardContext& model_context) {
+    if (model_context.workspace == nullptr) {
+        LOG_ERROR("QWEN_Model::decode_forward received null workspace in context");
+        return;
+    }
+    Workspace& workspace = *model_context.workspace;
+    SequencePool* seq_pool = model_context.seq_pool;
     // Implement the logic for the decode forward pass
     LOG_DEBUG("Entered QWEN_Model::decode_forward");
     if (!embedding 
@@ -223,12 +249,12 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
     if (batch.num_tokens == 0 ||
         batch.token_ids.size() != batch.num_tokens ||
         batch.token_positions.size() != batch.num_tokens ||
-        batch.sequences.size() != batch.num_tokens) {
+        batch.sequence_ids.size() != batch.num_tokens) {
         std::ostringstream oss;
         oss << "Invalid decode batch: num_tokens=" << batch.num_tokens
             << " token_ids=" << batch.token_ids.size()
             << " token_positions=" << batch.token_positions.size()
-            << " sequences=" << batch.sequences.size();
+            << " sequence_ids=" << batch.sequence_ids.size();
         LOG_ERROR(oss.str());
         return;
     }
@@ -256,8 +282,9 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         {batch.num_tokens, config.model_config.hidden_size},
         config.model_config.data_type
     );
-    ForwardContext context;
+    LayerForwardContext context;
     context.batch = &batch;
+    context.seq_pool = seq_pool;
     context.workspace = &workspace;
     context.config = &config;
     for(size_t i = 0; i < config.model_config.num_hidden_layers; ++i) {
@@ -330,7 +357,7 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
     post_processor->process(logits_on_CPU, context);
     free(logits_on_CPU.data);
 
-    for(size_t i = 0; i < batch.sequences.size(); ++i) {
+    for(size_t i = 0; i < batch.sampled_token_ids.size(); ++i) {
         batch.token_ids.push_back(batch.sampled_token_ids[i]);
         {
             std::ostringstream oss;
@@ -340,4 +367,224 @@ void QWEN_Model::decode_forward(Batch& batch, Workspace& workspace) {
         }
     }
 
+}
+
+void QWEN_Model::stage_prefill_forward(Batch& batch, ModelForwardContext& model_context) {
+    if (model_context.workspace == nullptr) {
+        LOG_ERROR("QWEN_Model::stage_prefill_forward received null workspace in context");
+        return;
+    }
+    Workspace& workspace = *model_context.workspace;
+    SequencePool* seq_pool = model_context.seq_pool;
+    size_t start_layer = model_context.start_layer;
+    size_t end_layer = model_context.end_layer;
+    void* external_hidden_in = model_context.external_hidden_in;
+    LOG_DEBUG("Entered QWEN_Model::stage_prefill_forward");
+    if (!embedding || layers.size() < config.model_config.num_hidden_layers + 2) {
+        std::ostringstream oss;
+        oss << "QWEN_Model is not fully initialized before stage_prefill_forward"
+             << " embedding: " << (embedding ? "initialized" : "null")
+             << " layers: " << layers.size() << "/" << (config.model_config.num_hidden_layers + 2);
+        LOG_ERROR(oss.str());
+        return;
+    }
+    if (start_layer > end_layer || end_layer > config.model_config.num_hidden_layers) {
+        LOG_ERROR("Invalid layer range in stage_prefill_forward");
+        return;
+    }
+    if (workspace.get_embedding_workspace() == nullptr ||
+        workspace.get_hidden2_workspace() == nullptr ||
+        workspace.get_logits_workspace() == nullptr) {
+        LOG_ERROR("Workspace buffers are not initialized before stage_prefill_forward");
+        return;
+    }
+    if (batch.num_tokens == 0 ||
+        batch.token_ids.size() != batch.num_tokens ||
+        batch.token_positions.size() != batch.num_tokens ||
+        batch.sequence_ids.size() != batch.num_tokens) {
+        LOG_ERROR("Invalid prefill batch in stage_prefill_forward");
+        return;
+    }
+
+    Tensor hidden(
+        batch.num_tokens * config.model_config.hidden_size,
+        workspace.get_embedding_workspace(),
+        {batch.num_tokens, config.model_config.hidden_size},
+        config.model_config.data_type
+    );
+    if(start_layer == 0) {
+        LOG_DEBUG("Running Embedding forward in stage_prefill_forward");
+        embedding->forward(batch.token_ids, hidden, batch.num_tokens);
+    } else {
+        if (external_hidden_in == nullptr) {
+            LOG_ERROR("stage_prefill_forward requires external_hidden_in when start_layer > 0");
+            return;
+        }
+        hidden.data = external_hidden_in;
+        LOG_DEBUG("Using external hidden input in stage_prefill_forward for non-first stage");
+    }
+
+    Tensor hidden2(
+        batch.num_tokens * config.model_config.hidden_size,
+        workspace.get_hidden2_workspace(),
+        {batch.num_tokens, config.model_config.hidden_size},
+        config.model_config.data_type
+    );
+
+    LayerForwardContext context;
+    context.batch = &batch;
+    context.seq_pool = seq_pool;
+    context.workspace = &workspace;
+    context.config = &config;
+
+    for (size_t i = start_layer; i < end_layer; ++i) {
+        context.layer_id = i;
+        layers[i]->prefill_forward(hidden, hidden2, context);
+        std::swap(hidden.data, hidden2.data);
+    }
+
+    if (model_context.external_hidden_out != nullptr) {
+        *model_context.external_hidden_out = hidden.data;
+    }
+
+    if (end_layer == config.model_config.num_hidden_layers) {
+        Tensor logits_output(
+            batch.num_tokens * config.model_config.vocab_size,
+            workspace.get_logits_workspace(),
+            {batch.num_tokens, config.model_config.vocab_size},
+            config.model_config.data_type
+        );
+        layers[config.model_config.num_hidden_layers]->prefill_forward(hidden, hidden, context);
+        layers[config.model_config.num_hidden_layers + 1]->prefill_forward(hidden, logits_output, context);
+
+        if (model_context.external_hidden_out != nullptr) {
+            *model_context.external_hidden_out = logits_output.data;
+        }
+    }
+}
+
+void QWEN_Model::stage_decode_forward(Batch& batch, ModelForwardContext& model_context) {
+    if (model_context.workspace == nullptr) {
+        LOG_ERROR("QWEN_Model::stage_decode_forward received null workspace in context");
+        return;
+    }
+    Workspace& workspace = *model_context.workspace;
+    SequencePool* seq_pool = model_context.seq_pool;
+    size_t start_layer = model_context.start_layer;
+    size_t end_layer = model_context.end_layer;
+    void* external_hidden_in = model_context.external_hidden_in;
+    LOG_DEBUG("Entered QWEN_Model::stage_decode_forward");
+    if (!embedding || !post_processor || layers.size() < config.model_config.num_hidden_layers + 2) {
+        std::ostringstream oss;
+        oss << "QWEN_Model is not fully initialized before stage_decode_forward"
+             << " embedding: " << (embedding ? "initialized" : "null")
+             << " post_processor: " << (post_processor ? "initialized" : "null")
+             << " layers: " << layers.size() << "/" << (config.model_config.num_hidden_layers + 2);
+        LOG_ERROR(oss.str());
+        return;
+    }
+    if (start_layer > end_layer || end_layer > config.model_config.num_hidden_layers) {
+        LOG_ERROR("Invalid layer range in stage_decode_forward");
+        return;
+    }
+    if (workspace.get_embedding_workspace() == nullptr ||
+        workspace.get_hidden2_workspace() == nullptr ||
+        workspace.get_logits_workspace() == nullptr) {
+        LOG_ERROR("Workspace buffers are not initialized before stage_decode_forward");
+        return;
+    }
+    if (batch.num_tokens == 0 ||
+        batch.token_ids.size() != batch.num_tokens ||
+        batch.token_positions.size() != batch.num_tokens ||
+        batch.sequence_ids.size() != batch.num_tokens) {
+        LOG_ERROR("Invalid decode batch in stage_decode_forward");
+        return;
+    }
+
+    Tensor hidden(
+        batch.num_tokens * config.model_config.hidden_size,
+        workspace.get_embedding_workspace(),
+        {batch.num_tokens, config.model_config.hidden_size},
+        config.model_config.data_type
+    );
+    if(start_layer == 0) {
+        LOG_DEBUG("Running Embedding forward in stage_decode_forward");
+        embedding->forward(batch.token_ids, hidden, batch.num_tokens);
+    } else {
+        if (external_hidden_in == nullptr) {
+            LOG_ERROR("stage_decode_forward requires external_hidden_in when start_layer > 0");
+            return;
+        }
+        hidden.data = external_hidden_in;
+        LOG_DEBUG("Using external hidden input in stage_decode_forward for non-first stage");
+    }
+    Tensor hidden2(
+        batch.num_tokens * config.model_config.hidden_size,
+        workspace.get_hidden2_workspace(),
+        {batch.num_tokens, config.model_config.hidden_size},
+        config.model_config.data_type
+    );
+
+    LayerForwardContext context;
+    context.batch = &batch;
+    context.seq_pool = seq_pool;
+    context.workspace = &workspace;
+    context.config = &config;
+
+    for (size_t i = start_layer; i < end_layer; ++i) {
+        context.layer_id = i;
+        layers[i]->decode_forward(hidden, hidden2, context);
+        std::swap(hidden.data, hidden2.data);
+    }
+
+    if (end_layer != config.model_config.num_hidden_layers) {
+        if (model_context.external_hidden_out != nullptr) {
+            *model_context.external_hidden_out = hidden.data;
+        }
+        return;
+    }
+
+    Tensor logits_output(
+        batch.num_tokens * config.model_config.vocab_size,
+        workspace.get_logits_workspace(),
+        {batch.num_tokens, config.model_config.vocab_size},
+        config.model_config.data_type
+    );
+    layers[config.model_config.num_hidden_layers]->decode_forward(hidden, hidden, context);
+    layers[config.model_config.num_hidden_layers + 1]->decode_forward(hidden, logits_output, context);
+
+    Tensor logits_on_CPU(
+        batch.num_tokens * config.model_config.vocab_size,
+        nullptr,
+        {batch.num_tokens, config.model_config.vocab_size},
+        config.model_config.data_type,
+        "cpu"
+    );
+    logits_on_CPU.data = malloc(logits_output.size);
+    if(logits_on_CPU.data == nullptr) {
+        LOG_ERROR("Failed to allocate CPU memory for logits in stage_decode_forward");
+        return;
+    }
+    cudaError_t cudaError = cudaMemcpy(
+        logits_on_CPU.data,
+        logits_output.data,
+        logits_output.size,
+        cudaMemcpyDeviceToHost
+    );
+    if (cudaError != cudaSuccess) {
+        LOG_ERROR("Failed to copy logits from GPU to CPU in stage_decode_forward");
+        free(logits_on_CPU.data);
+        return;
+    }
+
+    post_processor->process(logits_on_CPU, context);
+    free(logits_on_CPU.data);
+
+    for (size_t i = 0; i < batch.sampled_token_ids.size(); ++i) {
+        batch.token_ids.push_back(batch.sampled_token_ids[i]);
+    }
+
+    if (model_context.external_hidden_out != nullptr) {
+        *model_context.external_hidden_out = logits_output.data;
+    }
 }

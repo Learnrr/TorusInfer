@@ -32,4 +32,3 @@ inline constexpr const char* DataTypeName(DataType dtype) {
     }
     return "UNKNOWN";
 }
-

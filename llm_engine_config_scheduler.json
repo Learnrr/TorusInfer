@@ -8,5 +8,12 @@
   "top_p": 0.9,
   "top_k": 50,
   "greedy_decode": true,
-  "model_config_path": "/llm_infer_engine/qwen7b_model_config.json"
+  "model_config_path": "qwen7b_model_config.json",
+  "role": "scheduler",
+  "enable_pipeline_parallel": true,
+  "world_size": 2,
+  "pipeline_rank": 0,
+  "local_device_id": 0,
+  "stage_start_layer": 0,
+  "stage_end_layer": 14
 }

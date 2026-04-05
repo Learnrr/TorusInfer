@@ -471,10 +471,13 @@ ErrorCode Attention::write_cache(
     if(key.data == nullptr || value.data == nullptr) {
         return ErrorCode::INVALID_INPUT;
     }
-    if (context.batch == nullptr || context.batch->sequences.empty()) {
+    if (context.batch == nullptr || context.seq_pool == nullptr) {
         return ErrorCode::INVALID_INPUT;
     }
     size_t num_tokens = context.batch->num_tokens;
+    if (context.batch->sequence_ids.size() < num_tokens || context.batch->token_positions.size() < num_tokens) {
+        return ErrorCode::INVALID_INPUT;
+    }
     std::vector<size_t> h_block_ids(num_tokens);
     std::vector<size_t> h_block_offsets(num_tokens);
     std::vector<void*> h_kcache_block_ptrs(num_tokens);
@@ -484,7 +487,7 @@ ErrorCode Attention::write_cache(
         // for each token, find its target block and offset in the block
         // and the block's key and value pointers
         Batch* batch = context.batch;
-        auto seq = batch->sequences[i];
+        auto seq = context.seq_pool->get(batch->sequence_ids[i]);
         size_t pos = batch->token_positions[i];
 
         if (seq == nullptr) {
@@ -576,7 +579,7 @@ ErrorCode Attention::build_read_cache(
 
 ) {
     // do basic checks
-    if (context.batch == nullptr) {
+    if (context.batch == nullptr || context.seq_pool == nullptr) {
         return ErrorCode::INVALID_INPUT;
     }
     Batch* batch = context.batch;
@@ -584,7 +587,7 @@ ErrorCode Attention::build_read_cache(
     if (num_tokens == 0) {
         return ErrorCode::INVALID_INPUT;
     }
-    if (batch->sequences.size() < num_tokens 
+    if (batch->sequence_ids.size() < num_tokens
         || batch->token_positions.size() < num_tokens) {
         return ErrorCode::INVALID_INPUT;
     }
@@ -616,7 +619,7 @@ ErrorCode Attention::build_read_cache(
     }
 
     for(size_t i = 0; i < num_tokens; ++i) {
-        auto seq = batch->sequences[i];
+        auto seq = context.seq_pool->get(batch->sequence_ids[i]);
         size_t pos = batch->token_positions[i];
 
         size_t block_idx = pos / context.config->block_size;
@@ -649,7 +652,8 @@ ErrorCode Attention::build_decode_read_cache(
     size_t num_queries = batch->num_tokens;
     if (num_queries == 0 
         || batch->token_positions.size() < num_queries 
-        || batch->sequences.size() < num_queries) {
+        || batch->sequence_ids.size() < num_queries
+        || context.seq_pool == nullptr) {
         return ErrorCode::INVALID_INPUT;
     }
 
@@ -664,9 +668,13 @@ ErrorCode Attention::build_decode_read_cache(
 
     size_t cursor = 0;
     for (size_t q = 0; q < num_queries; ++q) {
-        auto seq = batch->sequences[q];
+        auto seq = context.seq_pool->get(batch->sequence_ids[q]);
         size_t qpos = batch->token_positions[q];
         size_t len = qpos + 1;
+
+        if (seq == nullptr) {
+            return ErrorCode::INVALID_INPUT;
+        }
 
         query_hist_start.push_back(cursor);
         query_hist_len.push_back(len);
@@ -805,11 +813,6 @@ ErrorCode Attention::qkv_projection(
         input.dtype
     );
 
-    cudaError_t cuda_err = cudaGetLastError();
-    if (cuda_err != cudaSuccess) {
-        LOG_ERROR("qkv_projection kernel launch failed");
-        return ErrorCode::CUDA_FAILURE;
-    }
     return ErrorCode::SUCCESS;
 
 }
