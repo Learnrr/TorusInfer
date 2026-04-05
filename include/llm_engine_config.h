@@ -28,6 +28,9 @@ public:
     size_t stage_start_layer = 0;
     size_t stage_end_layer = 0;
 
+    size_t max_decode_batch_flight = 1;
+    size_t max_prefill_batch_flight = 1;
+
     LLMEngineConfig() = default;
 
     ErrorCode build_from_file(const char* config_path) {
@@ -58,6 +61,9 @@ public:
         world_size = config.value("world_size", 1);
         pipeline_rank = config.value("pipeline_rank", 0);
         local_device_id = config.value("local_device_id", 0);
+        max_decode_batch_flight = config.value("max_decode_batch_flight", 1);
+        max_prefill_batch_flight = config.value("max_prefill_batch_flight", 1);
+
         // Load model config from the specified path
         if(model_config_path.empty()) {
             {

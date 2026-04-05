@@ -58,16 +58,46 @@ bool receive_from_worker(Channel* input, Batch& batch) {
 
 
 
-void CoordinatorExecutor::run_prefill(Batch& batch, ModelForwardContext& context) {
+ErrorCode CoordinatorExecutor::run_prefill(Batch& batch, ModelForwardContext& context) {
     (void)context;
     dispatch_to_worker(to_worker0, ForwardOp::PREFILL, batch);
     last_forward_ok = receive_from_worker(from_worker_last, batch);
+    if (!last_forward_ok) {
+        LOG_ERROR("Coordinator prefill forward failed; releasing events and reporting error.");
+        run_release_events(batch);
+        return ErrorCode::UNKNOWN_ERROR;
+    }
+
+    run_release_events(batch);
+    CompletionRecord completion;
+    completion.batch_id = batch.batch_id;
+    completion.op_type = ForwardOp::PREFILL;
+    completion.status = CompletionStatus::DONE;
+    completion.sequence_ids = batch.sequence_ids;
+    completion.sampled_token_ids = batch.sampled_token_ids;
+    push_completion(std::move(completion));
+    return ErrorCode::SUCCESS;
 }
 
-void CoordinatorExecutor::run_decode(Batch& batch, ModelForwardContext& context) {
+ErrorCode CoordinatorExecutor::run_decode(Batch& batch, ModelForwardContext& context) {
     (void)context;
     dispatch_to_worker(to_worker0, ForwardOp::DECODE, batch);
     last_forward_ok = receive_from_worker(from_worker_last, batch);
+    if (!last_forward_ok) {
+        LOG_ERROR("Coordinator decode forward failed; releasing events and reporting error.");
+        run_release_events(batch);
+        return ErrorCode::UNKNOWN_ERROR;
+    }
+
+    run_release_events(batch);
+    CompletionRecord completion;
+    completion.batch_id = batch.batch_id;
+    completion.op_type = ForwardOp::DECODE;
+    completion.status = CompletionStatus::DONE;
+    completion.sequence_ids = batch.sequence_ids;
+    completion.sampled_token_ids = batch.sampled_token_ids;
+    push_completion(std::move(completion));
+    return ErrorCode::SUCCESS;
 }
 
 void CoordinatorExecutor::run_free(Batch& batch) {
@@ -90,4 +120,19 @@ bool CoordinatorExecutor::consume_last_forward_ok() {
     const bool ok = last_forward_ok;
     last_forward_ok = true;
     return ok;
+}
+
+bool CoordinatorExecutor::poll_completion(CompletionRecord& out_record) {
+    std::lock_guard<std::mutex> lock(completion_mutex);
+    if (completed_records.empty()) {
+        return false;
+    }
+    out_record = std::move(completed_records.front());
+    completed_records.pop_front();
+    return true;
+}
+
+void CoordinatorExecutor::push_completion(CompletionRecord record) {
+    std::lock_guard<std::mutex> lock(completion_mutex);
+    completed_records.push_back(std::move(record));
 }

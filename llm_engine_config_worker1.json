@@ -15,5 +15,7 @@
   "pipeline_rank": 1,
   "local_device_id": 1,
   "stage_start_layer": 14,
-  "stage_end_layer": 28
+  "stage_end_layer": 28,
+  "max_decode_batch_flight": 2,
+  "max_prefill_batch_flight": 2
 }

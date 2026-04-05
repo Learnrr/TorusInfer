@@ -4,13 +4,17 @@
 #include "channel/Channel.h"
 #include "channel/ChannelMessage.h"
 #include "model/IModel.h"
-#include "Batch.h"
 #include <deque>
 #include <mutex>
+#include "Batch.h"
+#include "model/ModelForwardContext.h"
+#include <thread>
+#include <atomic>
 
-class CoordinatorExecutor : public Executor {
+class PipelineCoordinatorExecutor : public Executor {
 public:
-    explicit CoordinatorExecutor(IModel* model = nullptr) : model(model) {}
+    explicit PipelineCoordinatorExecutor(IModel* model = nullptr) : model(model) {}
+    ~PipelineCoordinatorExecutor();
 
     void set_channels(
         Channel* to_worker0,
@@ -18,6 +22,7 @@ public:
     ) {
         this->to_worker0 = to_worker0;
         this->from_worker_last = from_worker_last;
+        start_receive_thread_if_needed();
     }
 
     ErrorCode run_prefill(Batch& batch, ModelForwardContext& context) override;
@@ -27,16 +32,22 @@ public:
     void run_stop();
     bool consume_last_forward_ok();
 
+    void submit_decode_batch(const Batch& batch);
+    void submit_prefill_batch(const Batch& batch);
     bool poll_completion(CompletionRecord& out_record) override;
 
 private:
-    void push_completion(CompletionRecord record);
+    void start_receive_thread_if_needed();
+    bool receive_and_track(Batch* maybe_batch = nullptr);
 
     IModel* model = nullptr;
     Channel* to_worker0 = nullptr;
     Channel* from_worker_last = nullptr;
     bool last_forward_ok = true;
+
     std::deque<CompletionRecord> completed_records;
     std::mutex completion_mutex;
-
+    std::thread receive_thread;
+    std::atomic<bool> stop_receive_thread{false};
+    std::atomic<bool> receiver_started{false};
 };

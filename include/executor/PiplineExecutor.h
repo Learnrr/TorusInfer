@@ -21,8 +21,14 @@ public:
         stage_end_layer(stage_end_layer), 
         seq_pool(seq_pool) {}
 
-    void run_prefill(Batch& batch, ModelForwardContext& context) override;
-    void run_decode(Batch& batch, ModelForwardContext& context) override;
+    ErrorCode run_prefill(Batch& batch, ModelForwardContext& context) override;
+    ErrorCode run_decode(Batch& batch, ModelForwardContext& context) override;
+
+    bool poll_completion(CompletionRecord& out_record) override;
+
+    void run_release_events(Batch& batch) override;
+    void run_stop() override;
+    void run_free(Batch& batch) override;       
 
 private:
     IModel* model;

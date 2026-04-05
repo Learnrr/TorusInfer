@@ -3,7 +3,6 @@
 #include"Sequence.h"
 #include"define.h"
 #include "executor/Executor.h"
-#include "executor/CoordinatorExecutor.h"
 #include "Batch.h"
 #include "Cacheblock.h"
 #include "SequencePool.h"
@@ -19,6 +18,21 @@
 #include <condition_variable>
 #include "role/Role.h"
 #include "channel/Channel.h"
+#include "model/IModel.h"
+#include <unordered_map>
+#include <unordered_set>
+#include <deque>
+
+enum class InflightOp {
+    PREFILL = 0,
+    DECODE = 1,
+};
+
+struct InflightEntry{
+    Batch batch;
+    std::vector<size_t> sequence_ids;
+    InflightOp op_type;
+};
 
 class Scheduler: public Role {
     public:
@@ -26,11 +40,7 @@ class Scheduler: public Role {
     Scheduler(
         IModel* model,
         const LLMEngineConfig& engine_config
-    )
-        : seq_pool(std::make_unique<SequencePool>()),
-        model_executor(std::make_unique<CoordinatorExecutor>(model)),
-        engine_config(engine_config),
-        eos_token_id(engine_config.model_config.eos_token_id) {}
+    );
 
 
 
@@ -62,7 +72,7 @@ class Scheduler: public Role {
         std::mutex queue_mutex;
         std::condition_variable queue_cv;
 
-        std::unique_ptr<Executor> model_executor;
+        std::unique_ptr<Executor> coordinator;
         LLMEngineConfig engine_config;
         size_t eos_token_id;
         std::atomic<bool> stop_requested{false};
@@ -80,4 +90,12 @@ class Scheduler: public Role {
         void recoverFromPrefillFailure(const Batch& prefill_batch);
         void recoverFromDecodeFailure(const Batch& decode_batch);
         bool hasPendingWorkLocked() const;
+        bool hasRunnableDecodeWorkLocked() const;
+
+        std::unordered_map<size_t, InflightEntry> decode_inflight_batches; // batch_id -> inflight entry
+        std::unordered_map<size_t, InflightEntry> prefill_inflight_batches; // batch_id -> inflight entry
+        std::deque<size_t> completed_batch_ids; // batch_ids of completed batches in order of completion
+        // set of sequence ids that are currently in decoding
+        // prevent the same sequence from being included in multiple inflight decode batches
+        std::unordered_set<size_t> sequences_in_decoding; 
 };
