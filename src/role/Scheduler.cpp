@@ -20,13 +20,11 @@ void Scheduler::set_channels() {
 
     const int last_rank = engine_config.world_size - 1;
     Channel* to_worker0 = get_or_null("scheduler_to_worker_0");
-    Channel* from_worker0 = get_or_null("worker_0_to_scheduler");
-    Channel* to_worker_last = get_or_null("scheduler_to_worker_" + std::to_string(last_rank));
     Channel* from_worker_last = get_or_null("worker_" + std::to_string(last_rank) + "_to_scheduler");
 
     CoordinatorExecutor* coordinator = dynamic_cast<CoordinatorExecutor*>(model_executor.get());
     if (coordinator != nullptr) {
-        coordinator->set_channels(from_worker0, to_worker0, from_worker_last, to_worker_last);
+        coordinator->set_channels(to_worker0, from_worker_last);
     }
 }
 
@@ -93,6 +91,7 @@ void Scheduler::schedule() {
                 if (CoordinatorExecutor* coordinator = dynamic_cast<CoordinatorExecutor*>(model_executor.get())) {
                     coordinator->run_release_events(decode_batch);
                 }
+                recoverFromDecodeFailure(decode_batch);
                 continue;
             }
 
@@ -201,6 +200,16 @@ void Scheduler::recoverFromPrefillFailure(const Batch& prefill_batch) {
             }
         }
     }
+}
+
+void Scheduler::recoverFromDecodeFailure(const Batch& decode_batch) {
+    // Keep decode sequences in-place for retry on the next scheduling loop.
+    std::unordered_set<size_t> unique_ids(decode_batch.sequence_ids.begin(), decode_batch.sequence_ids.end());
+    LOG_ERROR(
+        "Decode failed for batch_id=" + std::to_string(decode_batch.batch_id) +
+        ", keeping " + std::to_string(unique_ids.size()) +
+        " sequence(s) in DECODING for next retry."
+    );
 }
 
 ErrorCode Scheduler::moveDecodingToFinished(const Batch& decode_batch) {

@@ -78,5 +78,6 @@ class Scheduler: public Role {
         void freeFinishedSequencesOnWorkers(const std::vector<size_t>& sequence_ids);
         void stopWorkers();
         void recoverFromPrefillFailure(const Batch& prefill_batch);
+        void recoverFromDecodeFailure(const Batch& decode_batch);
         bool hasPendingWorkLocked() const;
 };

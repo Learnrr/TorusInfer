@@ -23,10 +23,24 @@ bool receive_from_worker(Channel* input, Batch& batch) {
     if (input == nullptr) {
         LOG_ERROR("CoordinatorExecutor input channel is null.");
         return false;
-    }
+    }   
 
     ForwardMessage response;
     input->receive(response);
+    if (response.op_type == ForwardOp::INVALID) {
+        LOG_ERROR(
+            "Coordinator received INVALID response from worker for batch_id=" +
+            std::to_string(batch.batch_id)
+        );
+        return false;
+    }
+    if (response.op_type == ForwardOp::RELEASE_EVENTS_FAILED) {
+        LOG_ERROR(
+            "Coordinator received RELEASE_EVENTS_FAILED from worker for batch_id=" +
+            std::to_string(batch.batch_id)
+        );
+        return false;
+    }
     if (response.op_type != ForwardOp::DONE) {
         LOG_ERROR(
             "Coordinator expected DONE response from worker, got " +

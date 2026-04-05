@@ -10,15 +10,11 @@ public:
     explicit CoordinatorExecutor(IModel* model = nullptr) : model(model) {}
 
     void set_channels(
-        Channel* from_worker0,
         Channel* to_worker0,
-        Channel* from_worker_last,
-        Channel* to_worker_last
+        Channel* from_worker_last
     ) {
-        this->from_worker0 = from_worker0;
         this->to_worker0 = to_worker0;
         this->from_worker_last = from_worker_last;
-        this->to_worker_last = to_worker_last;
     }
 
     void run_prefill(Batch& batch, ModelForwardContext& context) override;
@@ -30,9 +26,7 @@ public:
 
 private:
     IModel* model = nullptr;
-    Channel* from_worker0 = nullptr;
     Channel* to_worker0 = nullptr;
     Channel* from_worker_last = nullptr;
-    Channel* to_worker_last = nullptr;
     bool last_forward_ok = true;
 };

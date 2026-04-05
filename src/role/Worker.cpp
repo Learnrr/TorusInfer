@@ -20,8 +20,12 @@ void Worker::set_channels() {
     };
 
     const int rank = engine_config.pipeline_rank;
-    from_scheduler = get_or_null("scheduler_to_worker_" + std::to_string(rank));
-    to_scheduler = get_or_null("worker_" + std::to_string(rank) + "_to_scheduler");
+    from_scheduler = engine_config.is_first_stage()
+        ? get_or_null("scheduler_to_worker_" + std::to_string(rank))
+        : nullptr;
+    to_scheduler = engine_config.is_last_stage()
+        ? get_or_null("worker_" + std::to_string(rank) + "_to_scheduler")
+        : nullptr;
 
     from_prev_worker = nullptr;
     to_next_worker = nullptr;
@@ -55,7 +59,7 @@ void Worker::run(){
     cleanup_retained_events();
     LOG_INFO("worker stopped running.");
 }
-void Worker::allocate_blocks(ForwardMessage& message) {
+ErrorCode Worker::allocate_blocks(ForwardMessage& message) {
     bool is_prefill = message.op_type == ForwardOp::PREFILL;
     auto& batch = message.batch;
 
@@ -87,7 +91,6 @@ void Worker::allocate_blocks(ForwardMessage& message) {
     }
     // try to allocate the required blocks for all sequences 
     //in the batch before running the model forward.
-    bool alloc_failed = false;
     for (const auto& [seq_id, required_blk_idx] : seq_required_blocks) {
         auto seq = seq_pool->get(seq_id);
         if (!seq) {
@@ -101,20 +104,15 @@ void Worker::allocate_blocks(ForwardMessage& message) {
                 blocks.push_back(std::get<std::shared_ptr<CacheBlock>>(result));
             } else {
                 LOG_ERROR("Worker failed to allocate KV block for sequence " + std::to_string(seq_id));
-                alloc_failed = true;
-                return;
+                return ErrorCode::MEMORY_FAILURE;
             }
         }
-        if (alloc_failed) {
-            return;
-        }
     }
-    if (alloc_failed) {
-        return;
-    }
+
+    return ErrorCode::SUCCESS;
 }
 
-void Worker::handle_local_forward(ForwardMessage& message) {
+ErrorCode Worker::handle_local_forward(ForwardMessage& message) {
     auto& batch = message.batch;
     ModelForwardContext context;
     context.workspace = workspace;
@@ -124,9 +122,11 @@ void Worker::handle_local_forward(ForwardMessage& message) {
     } else if (message.op_type == ForwardOp::DECODE) {
         model_executor->run_decode(batch, context);
     }
+
+    return ErrorCode::SUCCESS;
 }
 
-void Worker::handle_remote_forward(ForwardMessage& message, void** external_hidden_out) {
+ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external_hidden_out) {
     // for pipeline, external_hidden_in is hidden states received from previous stage,
     // external_hidden_out is hidden states to be sent to next stage
     // the two pointers all point to this worker's workspace
@@ -136,10 +136,10 @@ void Worker::handle_remote_forward(ForwardMessage& message, void** external_hidd
 
     void* local_hidden_input = nullptr;  
 
-    Batch batch = message.batch;
+    Batch& batch = message.batch;
     if (batch.num_tokens == 0) {
         LOG_ERROR("Worker received empty batch message.");
-        return;
+        return ErrorCode::INVALID_INPUT;
     }
 
     if(engine_config.is_first_stage()){
@@ -156,7 +156,7 @@ void Worker::handle_remote_forward(ForwardMessage& message, void** external_hidd
         } else {
             model_executor->run_decode(batch, context);
         }
-        return;
+        return ErrorCode::SUCCESS;
     }
 
     local_hidden_input = workspace->get_hidden_workspace();
@@ -166,7 +166,7 @@ void Worker::handle_remote_forward(ForwardMessage& message, void** external_hidd
     cudaError_t err = cudaIpcOpenMemHandle(&remote_base_ptr, handle, cudaIpcMemLazyEnablePeerAccess);
     if (err != cudaSuccess) {
         LOG_ERROR("Worker failed to open CUDA IPC handle: " + std::string(cudaGetErrorString(err)));
-        return;
+        return ErrorCode::CUDA_FAILURE;
     }
     const size_t incoming_offset = message.cuda_ipc_mem_offset;
     external_hidden_in = static_cast<void*>(static_cast<char*>(remote_base_ptr) + incoming_offset);    
@@ -176,7 +176,7 @@ void Worker::handle_remote_forward(ForwardMessage& message, void** external_hidd
     if (attr_err != cudaSuccess) {
         LOG_ERROR("Worker failed to query IPC pointer attributes: " + std::string(cudaGetErrorString(attr_err)));
         cudaIpcCloseMemHandle(remote_base_ptr);
-        return;
+        return ErrorCode::CUDA_FAILURE;
     }    
 
     // wait cuda event from sender
@@ -187,7 +187,7 @@ void Worker::handle_remote_forward(ForwardMessage& message, void** external_hidd
         if (open_event_err != cudaSuccess) {
             LOG_ERROR("Worker failed to open CUDA IPC event handle: " + std::string(cudaGetErrorString(open_event_err)));
             cudaIpcCloseMemHandle(remote_base_ptr);
-            return;
+            return ErrorCode::CUDA_FAILURE;
         }
 
         cudaError_t wait_err = cudaStreamWaitEvent(0, incoming_ready_event, 0);
@@ -195,7 +195,7 @@ void Worker::handle_remote_forward(ForwardMessage& message, void** external_hidd
             LOG_ERROR("Worker failed to wait on CUDA IPC event: " + std::string(cudaGetErrorString(wait_err)));
             cudaEventDestroy(incoming_ready_event);
             cudaIpcCloseMemHandle(remote_base_ptr);
-            return;
+            return ErrorCode::CUDA_FAILURE;
         }
     }
 
@@ -208,57 +208,31 @@ void Worker::handle_remote_forward(ForwardMessage& message, void** external_hidd
             cudaEventDestroy(incoming_ready_event);
         }
         cudaIpcCloseMemHandle(remote_base_ptr);
-        return;
+        return ErrorCode::CUDA_FAILURE;
     }    
-    //get remote device from IPC pointer attributes
-    const int remote_device = ptr_attr.device;
-
     //calculate hidden state size in bytes
     const size_t hidden_elements = batch.num_tokens * engine_config.model_config.hidden_size;
     const size_t hidden_bytes = hidden_elements * DataTypeBytes(engine_config.model_config.data_type);
 
-    //check remote device accessibility
-    int can_access_peer = 0;
-    cudaError_t peer_query_err = cudaDeviceCanAccessPeer(&can_access_peer, local_device, remote_device);
-    if (peer_query_err != cudaSuccess || can_access_peer == 0) {
+    //copy hidden states from imported IPC pointer to local workspace
+    cudaError_t copy_err = cudaMemcpyAsync(
+        local_hidden_input,
+        external_hidden_in,
+        hidden_bytes,
+        cudaMemcpyDeviceToDevice,
+        0
+    );
+
+    if (copy_err != cudaSuccess) {
         LOG_ERROR(
-            "Worker cannot access peer device for IPC copy: local=" + std::to_string(local_device) +
-            ", remote=" + std::to_string(remote_device)
+            "Worker failed to copy IPC hidden input to local workspace on local device " +
+            std::to_string(local_device) + ": " + std::string(cudaGetErrorString(copy_err))
         );
         if (incoming_ready_event != nullptr) {
             cudaEventDestroy(incoming_ready_event);
         }
         cudaIpcCloseMemHandle(remote_base_ptr);
-        return;
-    }
-    //enable peer access for IPC copy
-    cudaError_t enable_peer_err = cudaDeviceEnablePeerAccess(remote_device, 0);
-    if (enable_peer_err != cudaSuccess && enable_peer_err != cudaErrorPeerAccessAlreadyEnabled) {
-        LOG_ERROR("Worker failed to enable peer access: " + std::string(cudaGetErrorString(enable_peer_err)));
-        if (incoming_ready_event != nullptr) {
-            cudaEventDestroy(incoming_ready_event);
-        }
-        cudaIpcCloseMemHandle(remote_base_ptr);
-        return;
-    }    
-
-    //copy hidden states from remote workspace to local workspace
-    cudaError_t copy_err = cudaSuccess;
-    copy_err = cudaMemcpyPeerAsync(
-        local_hidden_input,
-        local_device,
-        external_hidden_in,
-        remote_device,
-        hidden_bytes,
-        0
-    );
-    if (copy_err != cudaSuccess) {
-        LOG_ERROR("Worker failed to copy IPC hidden input to local workspace: " + std::string(cudaGetErrorString(copy_err)));
-        if (incoming_ready_event != nullptr) {
-            cudaEventDestroy(incoming_ready_event);
-        }
-        cudaIpcCloseMemHandle(remote_base_ptr);
-        return;
+        return ErrorCode::CUDA_FAILURE;
     }
     // synchronize to make sure the copy is done before running the model forward
     cudaError_t copy_sync_err = cudaStreamSynchronize(0);
@@ -268,7 +242,7 @@ void Worker::handle_remote_forward(ForwardMessage& message, void** external_hidd
             cudaEventDestroy(incoming_ready_event);
         }
         cudaIpcCloseMemHandle(remote_base_ptr);
-        return;
+        return ErrorCode::CUDA_FAILURE;
     }    
     //run forward
     ModelForwardContext context;
@@ -296,13 +270,16 @@ void Worker::handle_remote_forward(ForwardMessage& message, void** external_hidd
     cudaError_t close_err = cudaIpcCloseMemHandle(remote_base_ptr);
     if (close_err != cudaSuccess) {
         LOG_ERROR("Worker failed to close CUDA IPC handle: " + std::string(cudaGetErrorString(close_err)));
+        return ErrorCode::CUDA_FAILURE;
     }
+
+    return ErrorCode::SUCCESS;
 }
 // external hidden out is from model forward
-void Worker::build_response_and_send(ForwardMessage& message, void* external_hidden_out) {
+ErrorCode Worker::build_response_and_send(ForwardMessage& message, void* external_hidden_out) {
     //build message for scheduler
     ForwardMessage response;
-    Batch batch = message.batch;
+    const Batch& batch = message.batch;
     if(engine_config.is_last_stage()){
         response.op_type = ForwardOp::DONE;
         response.batch = batch;
@@ -316,13 +293,13 @@ void Worker::build_response_and_send(ForwardMessage& message, void* external_hid
 
         if (external_hidden_out == nullptr) {
             LOG_ERROR("Worker did not produce external_hidden_out for next pipeline stage.");
-            return;
+            return ErrorCode::INVALID_INPUT;
         }
         // build IPC handle from workspace base address plus hidden offset
         void* workspace_base_addr = workspace->get_workspace();
         if (workspace_base_addr == nullptr) {
             LOG_ERROR("Worker workspace base address is invalid when exporting IPC hidden states.");
-            return;
+            return ErrorCode::INVALID_INPUT;
         }
 
         const size_t out_offset = static_cast<size_t>(
@@ -333,7 +310,7 @@ void Worker::build_response_and_send(ForwardMessage& message, void* external_hid
         cudaError_t ipc_err = cudaIpcGetMemHandle(&out_handle, workspace_base_addr);
         if (ipc_err != cudaSuccess) {
             LOG_ERROR("Worker failed to get CUDA IPC handle for workspace base address: " + std::string(cudaGetErrorString(ipc_err)));
-            return;
+            return ErrorCode::CUDA_FAILURE;
         }
         // need to create an IPC event to signal the next stage worker when the hidden states are ready
         cudaEvent_t outgoing_ready_event = nullptr;
@@ -343,7 +320,7 @@ void Worker::build_response_and_send(ForwardMessage& message, void* external_hid
         );
         if (create_err != cudaSuccess) {
             LOG_ERROR("Worker failed to create IPC event for outgoing hidden states: " + std::string(cudaGetErrorString(create_err)));
-            return;
+            return ErrorCode::CUDA_FAILURE;
         }
 
         cudaIpcEventHandle_t outgoing_ready_event_handle{};
@@ -351,14 +328,14 @@ void Worker::build_response_and_send(ForwardMessage& message, void* external_hid
         if (export_err != cudaSuccess) {
             LOG_ERROR("Worker failed to export IPC event handle: " + std::string(cudaGetErrorString(export_err)));
             cudaEventDestroy(outgoing_ready_event);
-            return;
+            return ErrorCode::CUDA_FAILURE;
         }
 
         cudaError_t record_err = cudaEventRecord(outgoing_ready_event, 0);
         if (record_err != cudaSuccess) {
             LOG_ERROR("Worker failed to record outgoing IPC event: " + std::string(cudaGetErrorString(record_err)));
             cudaEventDestroy(outgoing_ready_event);
-            return;
+            return ErrorCode::CUDA_FAILURE;
         }
 
         response.set_cuda_ipc_handle(
@@ -377,7 +354,10 @@ void Worker::build_response_and_send(ForwardMessage& message, void* external_hid
     ErrorCode send_error = send(response);
     if (send_error != ErrorCode::SUCCESS) {
         LOG_ERROR("Worker failed to send forward response.");
+        return send_error;
     }
+
+    return ErrorCode::SUCCESS;
 }
 void Worker::work() {
     while (!stop_requested.load()) {
@@ -398,15 +378,31 @@ void Worker::work() {
             stop_requested.store(true);
             break;
         }
+        // if receive done signal, just forward to next stage and continue to wait for next message
+        if (message.op_type == ForwardOp::INVALID) {
+            send(message);
+            continue;
+        }
         // if receive free sequence signal, free the finished sequences on workers 
         // and continue to wait for next message
         if (message.op_type == ForwardOp::FREE_SEQ) {
             freeFinishedSequencesOnWorkers(message.batch.sequence_ids);
             continue;
         }
+        if (message.op_type == ForwardOp::RELEASE_EVENTS_FAILED) {
+            ForwardMessage failure_response;
+            failure_response.batch.batch_id = message.batch.batch_id;
+            failure_response.op_type = ForwardOp::RELEASE_EVENTS_FAILED;
+            ErrorCode send_error = send(failure_response);
+            if (send_error != ErrorCode::SUCCESS) {
+                LOG_ERROR("Worker failed to forward RELEASE_EVENTS_FAILED control response.");
+            }
+            continue;
+        }
         // if receive release events, release the retained cuda events for this batch 
         // and send response to next stage 
         if (message.op_type == ForwardOp::RELEASE_EVENTS) {
+            bool release_error = false;
             const size_t release_batch_id = message.batch.batch_id;
             auto it = retained_outgoing_events.find(release_batch_id);
             if (it != retained_outgoing_events.end()) {
@@ -415,14 +411,15 @@ void Worker::work() {
                 cudaError_t destroy_err = cudaEventDestroy(event_to_release);
                 if (destroy_err != cudaSuccess) {
                     LOG_ERROR("Worker failed to destroy retained outgoing event: " + std::string(cudaGetErrorString(destroy_err)));
+                    release_error = true;
                 }
             } 
             ForwardMessage release_response;
             release_response.batch.batch_id = message.batch.batch_id;
             if (engine_config.is_last_stage()) {
-                release_response.op_type = ForwardOp::DONE;
+                release_response.op_type = release_error ? ForwardOp::RELEASE_EVENTS_FAILED : ForwardOp::DONE;
             } else {
-                release_response.op_type = ForwardOp::RELEASE_EVENTS;
+                release_response.op_type = release_error ? ForwardOp::RELEASE_EVENTS_FAILED : ForwardOp::RELEASE_EVENTS;
             }
             ErrorCode send_error = send(release_response);
             if (send_error != ErrorCode::SUCCESS) {
@@ -430,23 +427,79 @@ void Worker::work() {
             }
             continue;
         }
-        // handle prefill/decode message
-        Batch batch = message.batch;
-        if (batch.num_tokens == 0) {
-            LOG_ERROR("Worker received empty batch message.");
+        //error handling for unknown control message types
+        if (message.op_type != ForwardOp::PREFILL && message.op_type != ForwardOp::DECODE) {
+            ForwardMessage invalid_response;
+            invalid_response.op_type = ForwardOp::INVALID;
+            invalid_response.batch.batch_id = message.batch.batch_id;
+            invalid_response.batch.sequence_ids = message.batch.sequence_ids;
+            ErrorCode send_error = send(invalid_response);
+            if (send_error != ErrorCode::SUCCESS) {
+                LOG_ERROR("Worker failed to forward INVALID control response.");
+            }
             continue;
         }
-    
-        allocate_blocks(message);
 
-           void* external_hidden_out = nullptr;
-           if(!engine_config.enable_pipeline_parallel) {
-             handle_local_forward(message);
-        } else {
-               handle_remote_forward(message, &external_hidden_out);
+        // handle prefill/decode message
+        Batch& batch = message.batch;
+
+        //handle error case for malformed batch
+        batch.num_tokens = batch.num_tokens > 0 ? batch.num_tokens : batch.token_ids.size();
+        if (batch.num_tokens == 0) {
+            LOG_ERROR("Worker received empty batch message.");
+            ForwardMessage invalid_response;
+            invalid_response.op_type = ForwardOp::INVALID;
+            invalid_response.batch.batch_id = message.batch.batch_id;
+            invalid_response.batch.sequence_ids = message.batch.sequence_ids;
+            send(invalid_response);
+            continue;
+        }
+        if (batch.sequence_ids.size() < batch.num_tokens || batch.token_positions.size() < batch.num_tokens) {
+            LOG_ERROR("Worker received malformed batch: sequence_ids/token_positions size mismatch");
+            ForwardMessage invalid_response;
+            invalid_response.op_type = ForwardOp::INVALID;
+            invalid_response.batch.batch_id = message.batch.batch_id;
+            invalid_response.batch.sequence_ids = message.batch.sequence_ids;
+            send(invalid_response);
+            continue;
+        }
+        //allocate blocks for the batch before forward
+        ErrorCode alloc_error = allocate_blocks(message);
+        if (alloc_error != ErrorCode::SUCCESS) {
+            ForwardMessage invalid_response;
+            invalid_response.op_type = ForwardOp::INVALID;
+            invalid_response.batch.batch_id = message.batch.batch_id;
+            invalid_response.batch.sequence_ids = message.batch.sequence_ids;
+            send(invalid_response);
+            continue;
         }
 
-        build_response_and_send(message, external_hidden_out);
+        // do model forward
+        void* external_hidden_out = nullptr;
+        ErrorCode forward_error = ErrorCode::SUCCESS;
+        if(!engine_config.enable_pipeline_parallel) {
+            forward_error = handle_local_forward(message);
+        } else {
+            forward_error = handle_remote_forward(message, &external_hidden_out);
+        }
+        if (forward_error != ErrorCode::SUCCESS) {
+            ForwardMessage invalid_response;
+            invalid_response.op_type = ForwardOp::INVALID;
+            invalid_response.batch.batch_id = message.batch.batch_id;
+            invalid_response.batch.sequence_ids = message.batch.sequence_ids;
+            send(invalid_response);
+            continue;
+        }
+        // build response message and send to next stage or scheduler
+        ErrorCode send_response_error = build_response_and_send(message, external_hidden_out);
+        if (send_response_error != ErrorCode::SUCCESS) {
+            ForwardMessage invalid_response;
+            invalid_response.op_type = ForwardOp::INVALID;
+            invalid_response.batch.batch_id = message.batch.batch_id;
+            invalid_response.batch.sequence_ids = message.batch.sequence_ids;
+            send(invalid_response);
+            continue;
+        }
     }
 }
 

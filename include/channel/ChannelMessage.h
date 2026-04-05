@@ -24,6 +24,8 @@ enum class ForwardOp : uint8_t {
     RELEASE_EVENTS = 6, // when scheduler receive the prefill/decode response
                         // it will send relase events to worker, 
                         //worker will release the retained cuda events for this batch
+    INVALID = 7,
+    RELEASE_EVENTS_FAILED = 8,
 };
 
 struct ForwardMessage : public ChannelMessage {

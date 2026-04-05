@@ -28,10 +28,25 @@ ErrorCode ChannelManager::build_channels(
 
     if (role == "worker") {
         const int r = pipeline_rank;
-        add_channel("worker_" + std::to_string(r) + "_to_scheduler");
 
-        for(int i = r + 1; i < world_size; ++i) {
-            add_channel("worker_" + std::to_string(r) + "_to_worker_" + std::to_string(i));
+        // only first stage receives requests directly from scheduler
+        if (r == 0) {
+            add_channel("scheduler_to_worker_" + std::to_string(r));
+        }
+
+        // inbound from previous stage (if any)
+        if (r > 0) {
+            add_channel("worker_" + std::to_string(r - 1) + "_to_worker_" + std::to_string(r));
+        }
+
+        // only last stage sends final responses back to scheduler
+        if (r == world_size - 1) {
+            add_channel("worker_" + std::to_string(r) + "_to_scheduler");
+        }
+
+        // outbound to next stage only
+        if (r + 1 < world_size) {
+            add_channel("worker_" + std::to_string(r) + "_to_worker_" + std::to_string(r + 1));
         }
 
         return ErrorCode::SUCCESS;

@@ -69,9 +69,9 @@ class Worker: public Role {
         void freeFinishedSequencesOnWorkers(const std::vector<size_t>& sequence_ids);
         void cleanup_retained_events();
         void setdevice();
-        void allocate_blocks(ForwardMessage& message);
-        void handle_remote_forward(ForwardMessage& message, void** external_hidden_out);
-        void handle_local_forward(ForwardMessage& message);
-        void build_response_and_send(ForwardMessage& message, void* external_hidden_out);
+        ErrorCode allocate_blocks(ForwardMessage& message);
+        ErrorCode handle_remote_forward(ForwardMessage& message, void** external_hidden_out);
+        ErrorCode handle_local_forward(ForwardMessage& message);
+        ErrorCode build_response_and_send(ForwardMessage& message, void* external_hidden_out);
 
 };
