@@ -1,18 +1,18 @@
-# TorusInfer:  A **T**iered **O**rchestration **R**ing for **U**nified **S**cheduling and Pipelined **Infer**ence.
-supported model: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
+# ***TorusInfer***:  A ***T***iered ***O***rchestration ***R***ing for ***U***nified ***S***cheduling and Pipelined ***Infer***ence.
+Supported Model: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
 ## features
-1. moduled layers to build up model structure  
-2. paged attention  
-3. continuous batching  
-4. openai API support  
-5. model pipeline parallel -- Apr. 4, 2026  
+1. Modular Layers to Build up Model Structure  
+2. PagedAttention  
+3. Continuous Batching  
+4. Openai API Support  
+5. Model Pipeline Parallel -- Apr. 4, 2026  
 
 ## Architecture
 <div align="center">
-  <img src="assets/architecture.png" alt="architecture" width="600"/>
+  <img src="assets/architecture.png" alt="architecture" width="800"/>
 </div>
 
-## quick start  
+## Quick start  
 **1. clone to local**  
 `git clone ...`  
 **2. download weights**  
@@ -171,7 +171,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions   -H 'Content-Type: applicatio
 [2026-04-02 05:42:55] [INFO] /llm_infer_engine/src/Engine.cpp:124 - Sequence 1 metrics: Latency=8819ms, ITL=152ms, TPOT=152ms, TTFT=975ms     
 INFO:     127.0.0.1:43134 - "POST /v1/chat/completions HTTP/1.1" 200 OK  
 
-## benchmark (improving)   
+## Benchmark (improving)   
 SIZE FOR KVCACHE: 2147483648 bytes configured in llm_engine_config.json  
 ```
 python3 benchmark/benchmark_concurrency.py --base-url http://127.0.0.1:8000 --prompt "Write a short poem."  --requests 50  --concurrency 8 --top-p 1.0 --top-k 50 --max-tokens 128
@@ -237,7 +237,7 @@ Latency (all, ms):
   p99:               187645.75
   max:               196983.15
 ```
-## stress test
+## Stress Test
 **max_decode_batch_size = 16, max_prefill_batch_size = 16**  
 SIZE FOR KVCACHE: 8GB
 ```
