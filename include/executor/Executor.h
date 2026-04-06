@@ -3,6 +3,7 @@
 #include "model/ModelForwardContext.h"
 #include "error.h"
 #include "channel/ChannelMessage.h"
+#include "channel/Channel.h"
 
 enum class CompletionStatus {
     DONE = 0,
@@ -22,12 +23,13 @@ struct CompletionRecord {
 class Executor {
     public:
     virtual ~Executor() = default;
+    virtual void set_channels(Channel* to_worker0, Channel* from_worker_last) {}
     virtual ErrorCode run_prefill(Batch& batch, ModelForwardContext& context) = 0;
     virtual ErrorCode run_decode(Batch& batch, ModelForwardContext& context) = 0;
 
-    virtual bool poll_completion(CompletionRecord& out_record) = 0;
+    virtual bool poll_completion(CompletionRecord& out_record){}
 
-    virtual void run_release_events(Batch& batch) = 0;
-    virtual void run_stop() = 0;
-    virtual void run_free(Batch& batch) = 0;
+    virtual ErrorCode run_release_events(Batch& batch) = 0;
+    virtual ErrorCode run_stop() = 0;
+    virtual ErrorCode run_free(Batch& batch) = 0;
 };

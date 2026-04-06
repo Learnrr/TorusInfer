@@ -14,6 +14,7 @@ Scheduler::Scheduler(
     const LLMEngineConfig& engine_config
 )
     : seq_pool(std::make_unique<SequencePool>()),
+    // initialize coordinator executor based on whether pipeline parallel is enabled
       coordinator(
           engine_config.enable_pipeline_parallel
               ? std::unique_ptr<Executor>(std::make_unique<PipelineCoordinatorExecutor>(model))
@@ -37,16 +38,7 @@ void Scheduler::set_channels() {
     Channel* to_worker0 = get_or_null("scheduler_to_worker_0");
     Channel* from_worker_last = get_or_null("worker_" + std::to_string(last_rank) + "_to_scheduler");
 
-    CoordinatorExecutor* coordinator_ptr = dynamic_cast<CoordinatorExecutor*>(coordinator.get());
-    if (coordinator_ptr != nullptr) {
-        coordinator_ptr->set_channels(to_worker0, from_worker_last);
-        return;
-    }
-
-    PipelineCoordinatorExecutor* pipeline_coordinator = dynamic_cast<PipelineCoordinatorExecutor*>(coordinator.get());
-    if (pipeline_coordinator != nullptr) {
-        pipeline_coordinator->set_channels(to_worker0, from_worker_last);
-    }
+    coordinator->set_channels(to_worker0, from_worker_last);
 }
 
 void Scheduler::run() {
@@ -64,7 +56,8 @@ bool Scheduler::hasPendingWorkLocked() const {
            !prefill_inflight_batches.empty();
 }
 
-bool Scheduler::hasRunnableDecodeWorkLocked() const {
+bool Scheduler::hasRunnableDecodeWork() {
+    std::lock_guard<std::mutex> lock(queue_mutex);
     for (size_t seq_id : decoding_queue) {
         if (sequences_in_decoding.find(seq_id) != sequences_in_decoding.end()) {
             continue;
@@ -73,7 +66,7 @@ bool Scheduler::hasRunnableDecodeWorkLocked() const {
         if (!seq) {
             continue;
         }
-        if (seq->state == SequenceState::DECODING && !seq->token_ids.empty()) {
+        if (seq->state == SequenceState::DECODING) {
             return true;
         }
     }
@@ -86,7 +79,7 @@ bool Scheduler::hasRunnableDecodeWorkLocked() const {
         if (!seq) {
             continue;
         }
-        if (seq->state == SequenceState::PREFILLED && !seq->token_ids.empty()) {
+        if (seq->state == SequenceState::PREFILLED) {
             return true;
         }
     }
@@ -115,40 +108,34 @@ void Scheduler::schedule() {
         while (coordinator->poll_completion(record)) {
             // process completed record
             if (record.status == CompletionStatus::DONE) {
-                completed_batch_ids.push_back(record.batch_id);
                 Batch completed_batch;
                 auto decode_it = decode_inflight_batches.find(record.batch_id);
                 auto prefill_it = prefill_inflight_batches.find(record.batch_id);
                 bool is_decode_completion = false;
+                //completed decode batch
                 if(decode_it != decode_inflight_batches.end()){
                     completed_batch = decode_it->second.batch;
                     completed_batch.sampled_token_ids = record.sampled_token_ids;
                     is_decode_completion = true;
+                    decode_inflight_batches.erase(record.batch_id);
+                    for (size_t seq_id : record.sequence_ids) {
+                        sequences_in_decoding.erase(seq_id);
+                    }                    
+                //completed prefill batch
                 } else if(prefill_it != prefill_inflight_batches.end()){
                     completed_batch = prefill_it->second.batch;
+                    prefill_inflight_batches.erase(record.batch_id);
                 } else{
                     LOG_ERROR("Received completion record for unknown batch id " + std::to_string(record.batch_id));
                     continue;
                 }
-
-                decode_inflight_batches.erase(record.batch_id);
-                prefill_inflight_batches.erase(record.batch_id);
-                for (size_t seq_id : record.sequence_ids) {
-                    sequences_in_decoding.erase(seq_id);
-                }
-
-                LOG_DEBUG(
-                    "INFLIGHT COMPLETE: batch_id=" + std::to_string(record.batch_id) +
-                    ", decode_inflight=" + std::to_string(decode_inflight_batches.size()) +
-                    ", prefill_inflight=" + std::to_string(prefill_inflight_batches.size()) +
-                    ", total_inflight=" + std::to_string(decode_inflight_batches.size() + prefill_inflight_batches.size())
-                );
 
                 if(is_decode_completion){
                     //move finished sequences from decoding queue to finished queue
                     appendDecodedTokens(completed_batch);
                     moveDecodingToFinished(completed_batch);
                 } else{
+                    // prefill completion
                     for (size_t seq_id : completed_batch.sequence_ids) {
                         auto seq = seq_pool->get(seq_id);
                         if (seq && seq->state == SequenceState::PREFILLING) {
@@ -158,7 +145,9 @@ void Scheduler::schedule() {
                 }
 
             } else {
-                LOG_ERROR("Received failed completion record for batch " + std::to_string(record.batch_id) + " with status " + std::to_string(static_cast<int>(record.status)));
+                LOG_ERROR("Received failed completion record for batch " + 
+                    std::to_string(record.batch_id) + " with status " + 
+                    std::to_string(static_cast<int>(record.status)));
                 auto decode_it = decode_inflight_batches.find(record.batch_id);
                 auto prefill_it = prefill_inflight_batches.find(record.batch_id);
                 if(decode_it != decode_inflight_batches.end()){
@@ -172,29 +161,20 @@ void Scheduler::schedule() {
                 }
             }
         }       
-        
+        //check inflight vacancy
         size_t decode_flight_vacancy = engine_config.max_decode_batch_flight - decode_inflight_batches.size();
         size_t prefill_flight_vacancy = engine_config.max_prefill_batch_flight - prefill_inflight_batches.size();
 
-        bool has_decode_work = false;
-        {
-            std::lock_guard<std::mutex> lock(queue_mutex);
-            has_decode_work = hasRunnableDecodeWorkLocked();
-        }
+        bool has_decode_work = hasRunnableDecodeWork();
        
         if (decode_flight_vacancy > 0 && has_decode_work) {
             auto result = buildDecodeBatch();
             if (std::holds_alternative<ErrorCode>(result)) {
                 LOG_ERROR("Failed to build decode batch.");
-                return;
+                continue;
             }
             Batch decode_batch = std::get<Batch>(result);
             if (decode_batch.batch_size > 0 && decode_batch.num_tokens > 0) {
-                if (coordinator == nullptr) {
-                    LOG_ERROR("Scheduler decode path has null coordinator executor");
-                    return;
-                }
-
                 // model executor in scheduler will coordinate with workers to run the decode batch
                 ModelForwardContext decode_context;
                 ErrorCode err_code = coordinator->run_decode(decode_batch, decode_context);
@@ -233,14 +213,10 @@ void Scheduler::schedule() {
             auto result = buildPrefillBatch();
             if (std::holds_alternative<ErrorCode>(result)) {
                 LOG_ERROR("Failed to build prefill batch.");
-                return;
+                continue;
             }
             Batch prefill_batch = std::get<Batch>(result);
             if (prefill_batch.batch_size > 0 && prefill_batch.num_tokens > 0) {
-                if (coordinator == nullptr) {
-                    LOG_ERROR("Scheduler prefill path has null coordinator executor");
-                    return;
-                }
                 // model executor in scheduler will coordinate with workers to run the prefill batch
                 ModelForwardContext prefill_context;
                 ErrorCode err_code = coordinator->run_prefill(prefill_batch, prefill_context);
@@ -280,19 +256,10 @@ void Scheduler::request_stop() {
 }
 
 void Scheduler::stopWorkers() {
-    CoordinatorExecutor* coordinator_ptr = dynamic_cast<CoordinatorExecutor*>(coordinator.get());
-    if (coordinator_ptr != nullptr) {
-        coordinator_ptr->run_stop();
-        return;
+    ErrorCode stop_error = coordinator->run_stop();
+    if (stop_error != ErrorCode::SUCCESS) {
+        LOG_ERROR("Scheduler failed to send STOP to workers.");
     }
-
-    PipelineCoordinatorExecutor* pipeline_coordinator_ptr = dynamic_cast<PipelineCoordinatorExecutor*>(coordinator.get());
-    if (pipeline_coordinator_ptr != nullptr) {
-        pipeline_coordinator_ptr->run_stop();
-        return;
-    }
-
-    LOG_ERROR("Scheduler stop requested but no coordinator executor is available");
 }
 
 void Scheduler::recoverFromPrefillFailure(const Batch& prefill_batch) {
@@ -333,13 +300,7 @@ void Scheduler::recoverFromDecodeFailure(const Batch& decode_batch) {
     }
 
     // Keep decode sequences in-place for retry on the next scheduling loop.
-    std::unordered_set<size_t> unique_ids(decode_batch.sequence_ids.begin(), decode_batch.sequence_ids.end());
-    
-    LOG_ERROR(
-        "Decode failed for batch_id=" + std::to_string(decode_batch.batch_id) +
-        ", keeping " + std::to_string(unique_ids.size()) +
-        " sequence(s) in DECODING for next retry."
-    );
+    // no ops here
 }
 
 ErrorCode Scheduler::moveDecodingToFinished(const Batch& decode_batch) {
@@ -526,8 +487,9 @@ std::variant<Batch, ErrorCode> Scheduler::buildPrefillBatch() {
             break;
         }
     }
-
-    LOG_DEBUG("BUILD PREFILL BATCH: batch_size=" + std::to_string(batch.batch_size) + ", num_tokens=" + std::to_string(batch.num_tokens));
+    if(batch.batch_size > 0){
+        LOG_DEBUG("BUILD PREFILL BATCH: batch_size=" + std::to_string(batch.batch_size) + ", num_tokens=" + std::to_string(batch.num_tokens));
+    }
     return batch;
 }
 
@@ -616,7 +578,10 @@ void Scheduler::freeFinishedSequencesOnWorkers(const std::vector<size_t>& sequen
     Batch control_batch;
     control_batch.sequence_ids = sequence_ids;
 
-    coordinator->run_free(control_batch);
+    ErrorCode free_error = coordinator->run_free(control_batch);
+    if (free_error != ErrorCode::SUCCESS) {
+        LOG_ERROR("Scheduler failed to send FREE_SEQ control batch to workers.");
+    }
 }
 
 ErrorCode Scheduler::getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq) {

@@ -19,17 +19,17 @@ public:
     void set_channels(
         Channel* to_worker0,
         Channel* from_worker_last
-    ) {
+    ) override {
         this->to_worker0 = to_worker0;
         this->from_worker_last = from_worker_last;
-        start_receive_thread_if_needed();
+        start_receive_thread();
     }
 
     ErrorCode run_prefill(Batch& batch, ModelForwardContext& context) override;
     ErrorCode run_decode(Batch& batch, ModelForwardContext& context) override;
-    void run_free(Batch& batch)override;
-    void run_release_events(Batch& batch);
-    void run_stop();
+    ErrorCode run_free(Batch& batch) override;
+    ErrorCode run_release_events(Batch& batch) override;
+    ErrorCode run_stop() override;
     bool consume_last_forward_ok();
 
     void submit_decode_batch(const Batch& batch);
@@ -37,8 +37,8 @@ public:
     bool poll_completion(CompletionRecord& out_record) override;
 
 private:
-    void start_receive_thread_if_needed();
-    bool receive_and_track(Batch* maybe_batch = nullptr);
+    void start_receive_thread();
+    bool receive_and_track();
 
     IModel* model = nullptr;
     Channel* to_worker0 = nullptr;

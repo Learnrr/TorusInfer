@@ -31,7 +31,7 @@ PipelineCoordinatorExecutor::~PipelineCoordinatorExecutor() {
     }
 }
 
-void PipelineCoordinatorExecutor::start_receive_thread_if_needed() {
+void PipelineCoordinatorExecutor::start_receive_thread() {
     if (receiver_started.load()) {
         return;
     }
@@ -53,7 +53,7 @@ void PipelineCoordinatorExecutor::start_receive_thread_if_needed() {
     });
 }
 
-bool PipelineCoordinatorExecutor::receive_and_track(Batch* maybe_batch) {
+bool PipelineCoordinatorExecutor::receive_and_track() {
     if (from_worker_last == nullptr) {
         LOG_ERROR("PipelineCoordinatorExecutor input channel is null.");
         return false;
@@ -92,10 +92,6 @@ bool PipelineCoordinatorExecutor::receive_and_track(Batch* maybe_batch) {
         completed_records.push_back(std::move(record));
     }
 
-    if (maybe_batch != nullptr && !response.batch.sampled_token_ids.empty()) {
-        maybe_batch->sampled_token_ids = response.batch.sampled_token_ids;
-    }
-
     return ok;
 }
 
@@ -103,7 +99,7 @@ ErrorCode PipelineCoordinatorExecutor::run_prefill(Batch& batch, ModelForwardCon
     (void)context;
     if (to_worker0 == nullptr) {
         LOG_ERROR("PipelineCoordinatorExecutor cannot submit PREFILL: output channel is null");
-        return ErrorCode::UNKNOWN_ERROR;
+        return ErrorCode::INITIANLIZATION_ERROR;
     }
     submit_prefill_batch(batch);
     return ErrorCode::SUCCESS;
@@ -113,24 +109,46 @@ ErrorCode PipelineCoordinatorExecutor::run_decode(Batch& batch, ModelForwardCont
     (void)context;
     if (to_worker0 == nullptr) {
         LOG_ERROR("PipelineCoordinatorExecutor cannot submit DECODE: output channel is null");
-        return ErrorCode::UNKNOWN_ERROR;
+        return ErrorCode::INITIANLIZATION_ERROR;
     }
     submit_decode_batch(batch);
     return ErrorCode::SUCCESS;
 }
 
-void PipelineCoordinatorExecutor::run_free(Batch& batch) {
+ErrorCode PipelineCoordinatorExecutor::run_free(Batch& batch) {
+    if (to_worker0 == nullptr) {
+        LOG_ERROR("PipelineCoordinatorExecutor cannot submit FREE_SEQ: output channel is null");
+        last_forward_ok = false;
+        return ErrorCode::INITIANLIZATION_ERROR;
+    }
+
     dispatch_to_worker(to_worker0, ForwardOp::FREE_SEQ, batch);
+    last_forward_ok = true;
+    return ErrorCode::SUCCESS;
 }
 
-void PipelineCoordinatorExecutor::run_release_events(Batch& batch) {
+ErrorCode PipelineCoordinatorExecutor::run_release_events(Batch& batch) {
+    if (to_worker0 == nullptr) {
+        LOG_ERROR("PipelineCoordinatorExecutor cannot submit RELEASE_EVENTS: output channel is null");
+        last_forward_ok = false;
+        return ErrorCode::INITIANLIZATION_ERROR;
+    }
+
     dispatch_to_worker(to_worker0, ForwardOp::RELEASE_EVENTS, batch);
-    last_forward_ok = receive_and_track(nullptr);
+    // The dedicated receiver thread is the only consumer of from_worker_last.
+    last_forward_ok = true;
+    return ErrorCode::SUCCESS;
 }
 
-void PipelineCoordinatorExecutor::run_stop() {
+ErrorCode PipelineCoordinatorExecutor::run_stop() {
+    if (to_worker0 == nullptr) {
+        LOG_ERROR("PipelineCoordinatorExecutor cannot submit STOP: output channel is null");
+        return ErrorCode::INITIANLIZATION_ERROR;
+    }
+
     Batch control_batch;
     dispatch_to_worker(to_worker0, ForwardOp::STOP, control_batch);
+    return ErrorCode::SUCCESS;
 }
 
 bool PipelineCoordinatorExecutor::consume_last_forward_ok() {

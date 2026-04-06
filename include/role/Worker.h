@@ -3,7 +3,7 @@
 #include "role/Role.h"
 #include "executor/Executor.h"
 #include "executor/SingleCardExecutor.h"
-#include "executor/PiplineExecutor.h"
+#include "executor/PipelineExecutor.h"
 #include "model/IModel.h"
 #include "Workspace.h"
 #include "KVCacheManager.h"
@@ -24,18 +24,22 @@ class Worker: public Role {
                 this->engine_config = engine_config;
                 this->seq_pool = std::make_unique<SequencePool>();
                 if(engine_config.enable_pipeline_parallel){
-                    model_executor = std::make_unique<PiplineExecutor>(
+                    model_executor = std::make_unique<PipelineExecutor>(
                         model, 
                         workspace, 
                         engine_config.stage_start_layer, 
                         engine_config.stage_end_layer,
-                        seq_pool.get()
+                        seq_pool.get(),
+                        cache_manager,
+                        &retained_outgoing_events
                     );
                 } else {
                     model_executor = std::make_unique<SingleCardExecutor>(
                         model, 
                         workspace,
-                        seq_pool.get()
+                        seq_pool.get(),
+                        cache_manager,
+                        &retained_outgoing_events
                     );
                 }
                 this->cache_manager = cache_manager;
@@ -66,7 +70,6 @@ class Worker: public Role {
         std::unordered_map<size_t, cudaEvent_t> retained_outgoing_events;
         std::atomic<bool> stop_requested{false};
 
-        void freeFinishedSequencesOnWorkers(const std::vector<size_t>& sequence_ids);
         void cleanup_retained_events();
         void setdevice();
         ErrorCode allocate_blocks(ForwardMessage& message);

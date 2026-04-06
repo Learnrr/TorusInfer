@@ -90,11 +90,10 @@ class Scheduler: public Role {
         void recoverFromPrefillFailure(const Batch& prefill_batch);
         void recoverFromDecodeFailure(const Batch& decode_batch);
         bool hasPendingWorkLocked() const;
-        bool hasRunnableDecodeWorkLocked() const;
+        bool hasRunnableDecodeWork();
 
         std::unordered_map<size_t, InflightEntry> decode_inflight_batches; // batch_id -> inflight entry
         std::unordered_map<size_t, InflightEntry> prefill_inflight_batches; // batch_id -> inflight entry
-        std::deque<size_t> completed_batch_ids; // batch_ids of completed batches in order of completion
         // set of sequence ids that are currently in decoding
         // prevent the same sequence from being included in multiple inflight decode batches
         std::unordered_set<size_t> sequences_in_decoding; 

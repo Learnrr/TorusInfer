@@ -64,11 +64,14 @@ ErrorCode CoordinatorExecutor::run_prefill(Batch& batch, ModelForwardContext& co
     last_forward_ok = receive_from_worker(from_worker_last, batch);
     if (!last_forward_ok) {
         LOG_ERROR("Coordinator prefill forward failed; releasing events and reporting error.");
-        run_release_events(batch);
+        (void)run_release_events(batch);
         return ErrorCode::UNKNOWN_ERROR;
     }
 
-    run_release_events(batch);
+    if (run_release_events(batch) != ErrorCode::SUCCESS) {
+        LOG_ERROR("Coordinator prefill release_events failed.");
+        return ErrorCode::UNKNOWN_ERROR;
+    }
     CompletionRecord completion;
     completion.batch_id = batch.batch_id;
     completion.op_type = ForwardOp::PREFILL;
@@ -85,11 +88,14 @@ ErrorCode CoordinatorExecutor::run_decode(Batch& batch, ModelForwardContext& con
     last_forward_ok = receive_from_worker(from_worker_last, batch);
     if (!last_forward_ok) {
         LOG_ERROR("Coordinator decode forward failed; releasing events and reporting error.");
-        run_release_events(batch);
+        (void)run_release_events(batch);
         return ErrorCode::UNKNOWN_ERROR;
     }
 
-    run_release_events(batch);
+    if (run_release_events(batch) != ErrorCode::SUCCESS) {
+        LOG_ERROR("Coordinator decode release_events failed.");
+        return ErrorCode::UNKNOWN_ERROR;
+    }
     CompletionRecord completion;
     completion.batch_id = batch.batch_id;
     completion.op_type = ForwardOp::DECODE;
@@ -100,20 +106,40 @@ ErrorCode CoordinatorExecutor::run_decode(Batch& batch, ModelForwardContext& con
     return ErrorCode::SUCCESS;
 }
 
-void CoordinatorExecutor::run_free(Batch& batch) {
+ErrorCode CoordinatorExecutor::run_free(Batch& batch) {
+    if (to_worker0 == nullptr || from_worker_last == nullptr) {
+        LOG_ERROR("CoordinatorExecutor cannot run FREE_SEQ: channel is null");
+        last_forward_ok = false;
+        return ErrorCode::INITIANLIZATION_ERROR;
+    }
+
     dispatch_to_worker(to_worker0, ForwardOp::FREE_SEQ, batch);
     last_forward_ok = receive_from_worker(from_worker_last, batch);
+    return last_forward_ok ? ErrorCode::SUCCESS : ErrorCode::UNKNOWN_ERROR;
 }
 
-void CoordinatorExecutor::run_release_events(Batch& batch) {
+ErrorCode CoordinatorExecutor::run_release_events(Batch& batch) {
+    if (to_worker0 == nullptr || from_worker_last == nullptr) {
+        LOG_ERROR("CoordinatorExecutor cannot run RELEASE_EVENTS: channel is null");
+        last_forward_ok = false;
+        return ErrorCode::INITIANLIZATION_ERROR;
+    }
+
     dispatch_to_worker(to_worker0, ForwardOp::RELEASE_EVENTS, batch);
     last_forward_ok = receive_from_worker(from_worker_last, batch);
+    return last_forward_ok ? ErrorCode::SUCCESS : ErrorCode::UNKNOWN_ERROR;
 }
 
-void CoordinatorExecutor::run_stop() {
+ErrorCode CoordinatorExecutor::run_stop() {
+    if (to_worker0 == nullptr) {
+        LOG_ERROR("CoordinatorExecutor cannot run STOP: output channel is null");
+        return ErrorCode::INITIANLIZATION_ERROR;
+    }
+
     Batch control_batch;
     dispatch_to_worker(to_worker0, ForwardOp::STOP, control_batch);
     // best effort stop
+    return ErrorCode::SUCCESS;
 }
 
 bool CoordinatorExecutor::consume_last_forward_ok() {

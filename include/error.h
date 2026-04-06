@@ -11,4 +11,5 @@ enum class ErrorCode {
     COMPUTE_ERROR = 8,
     FAILED_TO_OPEN_CONFIG_FILE = 9,
     REQUEST_NOT_FOUND = 10,
+    INITIANLIZATION_ERROR = 11,
 };

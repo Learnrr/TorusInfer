@@ -1,5 +1,5 @@
 #include "role/Worker.h"
-#include "executor/PiplineExecutor.h"
+#include "executor/PipelineExecutor.h"
 #include "channel/ChannelManager.h"
 #include "utils/logger.h"
 #include "Sequence.h"
@@ -369,8 +369,14 @@ void Worker::work() {
         }
         //if receive stop signal, send stop to next stage and stop itself
         if (message.op_type == ForwardOp::STOP) {
+            ErrorCode stop_error = model_executor->run_stop();
+
             ForwardMessage stop_response;
-            stop_response.op_type = engine_config.is_last_stage() ? ForwardOp::DONE : ForwardOp::STOP;
+            if (stop_error != ErrorCode::SUCCESS) {
+                stop_response.op_type = ForwardOp::INVALID;
+            } else {
+                stop_response.op_type = engine_config.is_last_stage() ? ForwardOp::DONE : ForwardOp::STOP;
+            }
             ErrorCode send_error = send(stop_response);
             if (send_error != ErrorCode::SUCCESS) {
                 LOG_ERROR("Worker failed to forward STOP control response.");
@@ -386,7 +392,21 @@ void Worker::work() {
         // if receive free sequence signal, free the finished sequences on workers 
         // and continue to wait for next message
         if (message.op_type == ForwardOp::FREE_SEQ) {
-            freeFinishedSequencesOnWorkers(message.batch.sequence_ids);
+            ErrorCode free_error = model_executor->run_free(message.batch);
+
+            ForwardMessage cleanup_response;
+            cleanup_response.batch.sequence_ids = message.batch.sequence_ids;
+            if (free_error != ErrorCode::SUCCESS) {
+                cleanup_response.op_type = ForwardOp::INVALID;
+            } else if (engine_config.is_last_stage()) {
+                cleanup_response.op_type = ForwardOp::DONE;
+            } else {
+                cleanup_response.op_type = ForwardOp::FREE_SEQ;
+            }
+            ErrorCode send_error = send(cleanup_response);
+            if (send_error != ErrorCode::SUCCESS) {
+                LOG_ERROR("Worker failed to forward FREE_SEQ cleanup response.");
+            }
             continue;
         }
         if (message.op_type == ForwardOp::RELEASE_EVENTS_FAILED) {
@@ -402,24 +422,16 @@ void Worker::work() {
         // if receive release events, release the retained cuda events for this batch 
         // and send response to next stage 
         if (message.op_type == ForwardOp::RELEASE_EVENTS) {
-            bool release_error = false;
-            const size_t release_batch_id = message.batch.batch_id;
-            auto it = retained_outgoing_events.find(release_batch_id);
-            if (it != retained_outgoing_events.end()) {
-                cudaEvent_t event_to_release = it->second;
-                retained_outgoing_events.erase(it);
-                cudaError_t destroy_err = cudaEventDestroy(event_to_release);
-                if (destroy_err != cudaSuccess) {
-                    LOG_ERROR("Worker failed to destroy retained outgoing event: " + std::string(cudaGetErrorString(destroy_err)));
-                    release_error = true;
-                }
-            } 
+            ErrorCode release_error = model_executor->run_release_events(message.batch);
+
             ForwardMessage release_response;
             release_response.batch.batch_id = message.batch.batch_id;
-            if (engine_config.is_last_stage()) {
-                release_response.op_type = release_error ? ForwardOp::RELEASE_EVENTS_FAILED : ForwardOp::DONE;
+            if (release_error != ErrorCode::SUCCESS) {
+                release_response.op_type = ForwardOp::RELEASE_EVENTS_FAILED;
+            } else if (engine_config.is_last_stage()) {
+                release_response.op_type = ForwardOp::DONE;
             } else {
-                release_response.op_type = release_error ? ForwardOp::RELEASE_EVENTS_FAILED : ForwardOp::RELEASE_EVENTS;
+                release_response.op_type = ForwardOp::RELEASE_EVENTS;
             }
             ErrorCode send_error = send(release_response);
             if (send_error != ErrorCode::SUCCESS) {
@@ -540,30 +552,3 @@ ErrorCode Worker::send(const ForwardMessage& message) {
 }
 
 
-void Worker::freeFinishedSequencesOnWorkers(const std::vector<size_t>& sequence_ids) {
-    for (size_t seq_id : sequence_ids) {
-        auto seq = seq_pool->get(seq_id);
-        if (!seq) {
-            continue;
-        }
-        for (const auto& block : seq->blocks) {
-            if (block) {
-                cache_manager->free_cache_block(block->block_id);
-            }
-        }
-        seq->blocks.clear();
-        seq_pool->erase(seq_id);
-    }
-
-    ForwardMessage cleanup_response;
-    cleanup_response.batch.sequence_ids = sequence_ids;
-    if (engine_config.is_last_stage()) {
-        cleanup_response.op_type = ForwardOp::DONE;
-    } else {
-        cleanup_response.op_type = ForwardOp::FREE_SEQ;
-    }
-    ErrorCode send_error = send(cleanup_response);
-    if (send_error != ErrorCode::SUCCESS) {
-        LOG_ERROR("Worker failed to forward FREE_SEQ cleanup response.");
-    }    
-}
