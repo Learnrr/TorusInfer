@@ -9,7 +9,7 @@ supported model: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
 
 ## Architecture
 <div align="center">
-  <img src="assets/architecture.png" alt="architecture" width="400"/>
+  <img src="assets/architecture.png" alt="architecture" width="600"/>
 </div>
 
 ## quick start  
