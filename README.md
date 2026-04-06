@@ -5,7 +5,7 @@ supported model: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
 2. paged attention  
 3. continuous batching  
 4. openai API support  
-5. sequential pipeline on multiple instances -- Apr. 4, 2026
+5. model pipeline parallel -- Apr. 4, 2026  
 ## quick start  
 **1. clone to local**  
 `git clone ...`  
@@ -37,7 +37,9 @@ First, configure in `llm_engine_config_worker0.json`,
   "pipeline_rank": 0,
   "local_device_id": 0,
   "stage_start_layer": 0,
-  "stage_end_layer": 27
+  "stage_end_layer": 28,
+  "max_decode_batch_flight": 1,
+  "max_prefill_batch_flight": 1
 }
 ```
 Second, configure in `llm_engine_config_scheduler.json`, 
@@ -59,7 +61,9 @@ Second, configure in `llm_engine_config_scheduler.json`,
   "pipeline_rank": 0,
   "local_device_id": 0,
   "stage_start_layer": 0,
-  "stage_end_layer": 28
+  "stage_end_layer": 28,
+  "max_decode_batch_flight": 1,
+  "max_prefill_batch_flight": 1  
 }
 ```
 Third, start worker in project directory, add LOG_LEVEL=DEBUG if you want to DEBUG   
@@ -87,7 +91,9 @@ First, configure workers in `llm_engine_config_worker*.json`,  take 2 for exampl
   "pipeline_rank": 0,
   "local_device_id": 0,
   "stage_start_layer": 0,
-  "stage_end_layer": 14
+  "stage_end_layer": 14,
+  "max_decode_batch_flight": 2,
+  "max_prefill_batch_flight": 2
 }
 {
   "max_decode_batch_size": 8,
@@ -106,7 +112,9 @@ First, configure workers in `llm_engine_config_worker*.json`,  take 2 for exampl
   "pipeline_rank": 1,
   "local_device_id": 1,
   "stage_start_layer": 14,
-  "stage_end_layer": 28
+  "stage_end_layer": 28,
+  "max_decode_batch_flight": 2,
+  "max_prefill_batch_flight": 2
 }
 ```
 Second, configure in `llm_engine_config_scheduler.json`, 
@@ -128,7 +136,9 @@ Second, configure in `llm_engine_config_scheduler.json`,
   "pipeline_rank": 0,
   "local_device_id": 0,
   "stage_start_layer": 0,
-  "stage_end_layer": 28
+  "stage_end_layer": 28,
+  "max_decode_batch_flight": 2,
+  "max_prefill_batch_flight": 2  
 }
 ```
 Third, start workers in project directory, add LOG_LEVEL=DEBUG if you want to DEBUG   

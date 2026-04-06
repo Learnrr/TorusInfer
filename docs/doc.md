@@ -29,3 +29,28 @@ situations, e.g. prefill, decode, release resource and so on. Usually
 the scheduler send a message to the first worker to let it do the job,
 then the worker pass the message down after it finishes, and the last
 worker will send response back to scheduler.
+
+Apr. 5, 2026  
+
+1. support Pipeline Parallelism
+add Pipeline executor to support pipeline parallelism without modifying
+too much other parts. Currently there are singleCardexecutor which is
+for simple single GPU inference and PipelineExecutor which is for
+multiple GPU inference with pipeline parallelism.
+
+2. split executor into scheduler side and worker side
+scheduler side executor is for scheduling, protocol sending and
+receiveing, while worker side executor is for model forward
+Different exectuor is for different mechanism. Currently scheduler side executor there are
+coordinator (for normal) and pipelineCoordinator (for pipeline)
+and for worker side executor there are singlecard for normal, and Pipeline for pipeline.
+
+3. pipeline parallel inference
+every time the scheduler can submit a prefill/decode batch without
+blocking. The maximum number of in-flight batches can be configured in
+config file. But it doesnot support multiple batch computation when do
+the inference. SO the point is, previously after the scheduler submit a
+prefill/decode batch, there is only one batch in the pipeline, even
+there are multiple GPUs, which means only one is working while others
+idle. Now all are working but only one batch on one GPU. So different
+batch sizes may have different GPU utilization.
