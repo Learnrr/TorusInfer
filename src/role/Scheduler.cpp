@@ -683,12 +683,15 @@ void Scheduler::applyPrefixProbeToPrefillBatch(Batch& prefill_batch) {
                     seq->state = SequenceState::PREFILLED;
                 }
             } else {
+                const size_t suffix_len = seq_len - hit_tokens;
                 for (size_t j = hit_tokens; j < seq_len; ++j) {
                     new_token_ids.push_back(prefill_batch.token_ids[cursor + j]);
                     new_token_positions.push_back(prefill_batch.token_positions[cursor + j]);
                     new_sequence_ids.push_back(prefill_batch.sequence_ids[cursor + j]);
                 }
-                new_max_token_positions.push_back(prefill_batch.max_token_positions[seq_idx]);
+                // max_token_positions is used as per-sequence query length marker in prefill path.
+                // After trimming prefix hits, it must match suffix tokens kept in this batch.
+                new_max_token_positions.push_back(suffix_len - 1);
                 new_prefix_hit_tokens.push_back(hit_tokens);
             }
 

@@ -34,6 +34,8 @@ public:
     ErrorCode run_stop() override;
     ErrorCode run_free(Batch& batch) override;    
 
+    void run_prefix_probe(Batch& batch);
+
 private:
     IModel* model;
     Workspace* workspace;

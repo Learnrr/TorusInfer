@@ -39,5 +39,5 @@ all: $(TARGET)
 
 .PHONY: clean
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET)
+	rm -rf $(BUILD_DIR)
 	rm -rf $(ROOT_DIR)/cpp_engine.so

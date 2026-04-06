@@ -174,3 +174,12 @@ bool PipelineCoordinatorExecutor::poll_completion(CompletionRecord& out_record) 
     completed_records.pop_front();
     return true;
 }
+
+void PipelineCoordinatorExecutor::run_prefix_probe(Batch& batch) {
+    // Pipeline coordinator currently uses a dedicated async receive thread for forward
+    // completions. To avoid introducing a second consumer path on the same channel,
+    // prefix probe is treated as unsupported here.
+    (void)batch;
+    last_forward_ok = true;
+    LOG_WARNING("PipelineCoordinatorExecutor::run_prefix_probe is not implemented; skipping probe in pipeline mode.");
+}

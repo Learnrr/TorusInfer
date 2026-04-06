@@ -79,11 +79,21 @@ void SingleCardExecutor::run_prefix_probe(Batch& batch) {
     }
     prefix_cache_manager->get_longest_prefix(batch);
 
-    size_t batch_size = batch.sequence_ids.size();
-    for(size_t i = 0; i < batch_size; ++i){
-        size_t seq_id = batch.sequence_ids[i];
-        size_t prefix_hit_tokens = batch.prefix_hit_tokens_per_seq[i];
-        INFO("SingleCardExecutor prefix probe result for sequence " + std::to_string(seq_id) + ": " + std::to_string(prefix_hit_tokens) + " prefix tokens hit in cache.");
+    size_t cursor = 0;
+    for (size_t seq_idx = 0; seq_idx < batch.batch_size; ++seq_idx) {
+        const size_t seq_len = batch.max_token_positions[seq_idx] + 1;
+        if (cursor >= batch.sequence_ids.size()) {
+            break;
+        }
+        const size_t seq_id = batch.sequence_ids[cursor];
+        const size_t prefix_hit_tokens = batch.prefix_hit_tokens_per_seq[seq_idx];
+        LOG_INFO(
+            "SingleCardExecutor prefix probe result for sequence " +
+            std::to_string(seq_id) + ": " +
+            std::to_string(prefix_hit_tokens) +
+            " prefix tokens hit in cache."
+        );
+        cursor += seq_len;
     }
 }
 
