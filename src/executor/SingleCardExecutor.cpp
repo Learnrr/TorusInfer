@@ -8,10 +8,12 @@ ErrorCode SingleCardExecutor::run_prefill(Batch& batch, ModelForwardContext& con
         return ErrorCode::INVALID_INPUT;
     }
     model->prefill_forward(batch, context);
-    
-    ErrorCode prefix_cache_result = write_prefix_to_cache(batch);
-    if (prefix_cache_result != ErrorCode::SUCCESS) {
-        return prefix_cache_result;
+
+    if(engine_config.enable_prefix_cache){
+        ErrorCode prefix_cache_result = write_prefix_to_cache(batch);
+        if (prefix_cache_result != ErrorCode::SUCCESS) {
+            return prefix_cache_result;
+        }
     }
 
     return ErrorCode::SUCCESS;

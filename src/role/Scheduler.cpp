@@ -241,16 +241,19 @@ void Scheduler::schedule() {
                     recoverFromPrefillFailure(prefill_batch);
                     continue;
                 } else{
-                    // handle full hit sequences that can be directly moved to PREFILLED state without running prefill forward.
-                    if (!prefill_batch.prefill_full_hit_sequence_ids.empty()) {
-                        std::unordered_set<size_t> full_hit_unique(
-                            prefill_batch.prefill_full_hit_sequence_ids.begin(),
-                            prefill_batch.prefill_full_hit_sequence_ids.end()
-                        );
-                        for (size_t seq_id : full_hit_unique) {
-                            auto seq = seq_pool->get(seq_id);
-                            if (seq && seq->state == SequenceState::PREFILLING) {
-                                seq->state = SequenceState::PREFILLED;
+                    // handle full hit sequences that can be directly 
+                    //moved to PREFILLED state without running prefill forward.
+                    if(engine_config.enable_prefix_cache){
+                        if (!prefill_batch.prefill_full_hit_sequence_ids.empty()) {
+                            std::unordered_set<size_t> full_hit_unique(
+                                prefill_batch.prefill_full_hit_sequence_ids.begin(),
+                                prefill_batch.prefill_full_hit_sequence_ids.end()
+                            );
+                            for (size_t seq_id : full_hit_unique) {
+                                auto seq = seq_pool->get(seq_id);
+                                if (seq && seq->state == SequenceState::PREFILLING) {
+                                    seq->state = SequenceState::PREFILLED;
+                                }
                             }
                         }
                     }

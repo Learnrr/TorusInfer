@@ -148,7 +148,7 @@ ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external
     void* external_hidden_in = nullptr;
     // remote_base_ptr is the workspace base pointer opened from IPC handle
     void* remote_base_ptr = nullptr;
-
+    // places to hold the hiddens to forward, the data is copied from previous stage
     void* local_hidden_input = nullptr;  
 
     Batch& batch = message.batch;
@@ -172,6 +172,7 @@ ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external
         return ErrorCode::INVALID_INPUT;
     }
 
+    // first stage worker can directly run forward without IPC handle and hidden state copy
     if(engine_config.is_first_stage()){
         //build model forward context
         ModelForwardContext context;

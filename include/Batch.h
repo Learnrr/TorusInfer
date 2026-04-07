@@ -13,7 +13,8 @@ struct Batch {
 
     std::vector<std::size_t> sequence_ids;
 
-    std::vector<size_t> prefix_hit_tokens_per_seq;
-    std::vector<size_t> prefill_full_hit_sequence_ids;
+    //for prefix caching
+    std::vector<size_t> prefix_hit_tokens_per_seq; // number of prefix tokens hit in cache for each sequence in the batch, aligned with batch_size
+    std::vector<size_t> prefill_full_hit_sequence_ids; // sequence ids that fully hit the prefix cache
 
 };
