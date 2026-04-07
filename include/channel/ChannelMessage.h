@@ -26,11 +26,19 @@ enum class ForwardOp : uint8_t {
                         //worker will release the retained cuda events for this batch
     INVALID = 7,
     RELEASE_EVENTS_FAILED = 8,
+
+    //for prefix caching
+    PREFIX_PROBE = 9, 
+    PREFIX_PROBE_RESPONSE = 10,
 };
 
 struct ForwardMessage : public ChannelMessage {
     ForwardOp op_type = ForwardOp::UNKNOWN;
     Batch batch;
+    // Actual hidden token count produced by previous stage for IPC transfer.
+    // this is used to detect if the previous stage used the same tokens in a batch as the current worker batch
+    // this is also important for prefix caching to see if the current worker trim the prefill batch the same as the prebious one.
+    size_t produced_hidden_tokens = 0;
     //ipc handle for passing hidden states between pipeline stages on diff GPUs
     bool has_cuda_ipc_handle = false;
     //event handle for synchronizing when receiving hidden states via IPC
@@ -94,8 +102,10 @@ struct ForwardMessage : public ChannelMessage {
             vec_bytes(batch.sampled_token_ids) +
             vec_bytes(batch.sequence_ids) +
             vec_bytes(batch.max_token_positions) +
+            vec_bytes(batch.prefix_hit_tokens_per_seq) +
             sizeof(batch.num_tokens) +
             sizeof(batch.batch_size) +
+            sizeof(produced_hidden_tokens) +
             sizeof(has_handle) +
             sizeof(has_event_handle) +
             sizeof(cuda_ipc_mem_offset) +
@@ -127,8 +137,10 @@ struct ForwardMessage : public ChannelMessage {
         write_vector(offset, batch.sampled_token_ids);
         write_vector(offset, batch.sequence_ids);
         write_vector(offset, batch.max_token_positions);
+        write_vector(offset, batch.prefix_hit_tokens_per_seq);
         write_scalar(offset, batch.num_tokens);
         write_scalar(offset, batch.batch_size);
+        write_scalar(offset, produced_hidden_tokens);
         write_scalar(offset, has_handle);
         write_scalar(offset, has_event_handle);
         write_scalar(offset, cuda_ipc_mem_offset);
@@ -159,9 +171,11 @@ struct ForwardMessage : public ChannelMessage {
         batch.sampled_token_ids.clear();
         batch.sequence_ids.clear();
         batch.max_token_positions.clear();
+        batch.prefix_hit_tokens_per_seq.clear();
         batch.num_tokens = 0;
         batch.batch_size = 0;
         batch.batch_id = 0;
+        produced_hidden_tokens = 0;
 
         has_cuda_ipc_handle = false;
         cuda_ipc_handle_bytes.fill(0);
@@ -219,10 +233,16 @@ struct ForwardMessage : public ChannelMessage {
         if (!read_vector(offset, batch.max_token_positions)) {
             return;
         }
+        if (!read_vector(offset, batch.prefix_hit_tokens_per_seq)) {
+            return;
+        }
         if (!read_scalar(offset, batch.num_tokens)) {
             return;
         }
         if (!read_scalar(offset, batch.batch_size)) {
+            return;
+        }
+        if (!read_scalar(offset, produced_hidden_tokens)) {
             return;
         }
         uint8_t has_handle = 0;

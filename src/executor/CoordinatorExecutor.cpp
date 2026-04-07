@@ -1,5 +1,5 @@
 #include "executor/CoordinatorExecutor.h"
-
+#include <algorithm>
 #include "utils/logger.h"
 
 namespace {
@@ -41,6 +41,15 @@ bool receive_from_worker(Channel* input, Batch& batch) {
         );
         return false;
     }
+    //handle prefix probe response
+    if(response.op_type == ForwardOp::PREFIX_PROBE_RESPONSE){
+         if(response.batch.prefix_hit_tokens_per_seq.empty()){
+            LOG_ERROR("Coordinator received empty PREFIX_PROBE_RESPONSE from worker for batch_id=" + std::to_string(batch.batch_id));
+            return false;
+        }
+        batch.prefix_hit_tokens_per_seq = std::move(response.batch.prefix_hit_tokens_per_seq);
+        return true;
+    }
     if (response.op_type != ForwardOp::DONE) {
         LOG_ERROR(
             "Coordinator expected DONE response from worker, got " +
@@ -48,8 +57,9 @@ bool receive_from_worker(Channel* input, Batch& batch) {
         );
         return false;
     }
+    
     if (!response.batch.sampled_token_ids.empty()) {
-        batch.sampled_token_ids = response.batch.sampled_token_ids;
+        batch.sampled_token_ids = std::move(response.batch.sampled_token_ids);
     }
     return true;
 }
@@ -161,4 +171,20 @@ bool CoordinatorExecutor::poll_completion(CompletionRecord& out_record) {
 void CoordinatorExecutor::push_completion(CompletionRecord record) {
     std::lock_guard<std::mutex> lock(completion_mutex);
     completed_records.push_back(std::move(record));
+}
+
+ErrorCode CoordinatorExecutor::run_prefix_probe(Batch& batch){
+    if (to_worker0 == nullptr || from_worker_last == nullptr) {
+        LOG_ERROR("CoordinatorExecutor cannot run PREFIX_PROBE: channel is null");
+        last_forward_ok = false;
+        return ErrorCode::INITIANLIZATION_ERROR;
+    }
+
+    dispatch_to_worker(to_worker0, ForwardOp::PREFIX_PROBE, batch);
+    last_forward_ok = receive_from_worker(from_worker_last, batch);
+    if (!last_forward_ok) {
+        LOG_ERROR("Coordinator prefix probe failed for batch_id=" + std::to_string(batch.batch_id));
+        return ErrorCode::UNKNOWN_ERROR;
+    }
+    return ErrorCode::SUCCESS;
 }

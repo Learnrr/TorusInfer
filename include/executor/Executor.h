@@ -35,4 +35,9 @@ class Executor {
     virtual ErrorCode run_release_events(Batch& batch) = 0;
     virtual ErrorCode run_stop() = 0;
     virtual ErrorCode run_free(Batch& batch) = 0;
+
+    virtual ErrorCode run_prefix_probe(Batch& batch) {
+        (void)batch;
+        return ErrorCode::SUCCESS;
+    }
 };

@@ -10,15 +10,14 @@
 #include <unordered_set>
 
 Scheduler::Scheduler(
-    IModel* model,
     const LLMEngineConfig& engine_config
 )
     : seq_pool(std::make_unique<SequencePool>()),
     // initialize coordinator executor based on whether pipeline parallel is enabled
       coordinator(
           engine_config.enable_pipeline_parallel
-              ? std::unique_ptr<Executor>(std::make_unique<PipelineCoordinatorExecutor>(model))
-              : std::unique_ptr<Executor>(std::make_unique<CoordinatorExecutor>(model))
+              ? std::unique_ptr<Executor>(std::make_unique<PipelineCoordinatorExecutor>())
+              : std::unique_ptr<Executor>(std::make_unique<CoordinatorExecutor>())
       ),
       engine_config(engine_config),
       eos_token_id(engine_config.model_config.eos_token_id) {}
@@ -216,6 +215,22 @@ void Scheduler::schedule() {
                 continue;
             }
             Batch prefill_batch = std::get<Batch>(result);
+            //run prefix probe before prefill if enabled in engine config, 
+            // and attach the prefix hit tokens info to prefill batch
+            if(engine_config.enable_prefix_cache){
+                ErrorCode probe_error = coordinator->run_prefix_probe(prefill_batch);
+                if (probe_error != ErrorCode::SUCCESS) {
+                    LOG_ERROR(
+                        "Scheduler prefix probe failed for batch_id=" +
+                        std::to_string(prefill_batch.batch_id) +
+                        ", skip this batch and retry in next loop."
+                    );
+                    recoverFromPrefillFailure(prefill_batch);
+                    continue;
+                }
+                applyPrefixProbeToPrefillBatch(prefill_batch);
+
+            }
             if (prefill_batch.batch_size > 0 && prefill_batch.num_tokens > 0) {
                 // model executor in scheduler will coordinate with workers to run the prefill batch
                 ModelForwardContext prefill_context;
@@ -225,6 +240,23 @@ void Scheduler::schedule() {
                     recoverFromPrefillFailure(prefill_batch);
                     continue;
                 } else{
+                    // handle full hit sequences that can be directly 
+                    //moved to PREFILLED state without running prefill forward.
+                    if(engine_config.enable_prefix_cache){
+                        if (!prefill_batch.prefill_full_hit_sequence_ids.empty()) {
+                            std::unordered_set<size_t> full_hit_unique(
+                                prefill_batch.prefill_full_hit_sequence_ids.begin(),
+                                prefill_batch.prefill_full_hit_sequence_ids.end()
+                            );
+                            for (size_t seq_id : full_hit_unique) {
+                                auto seq = seq_pool->get(seq_id);
+                                if (seq && seq->state == SequenceState::PREFILLING) {
+                                    seq->state = SequenceState::PREFILLED;
+                                }
+                            }
+                        }
+                    }
+
                     InflightEntry entry;
                     entry.batch = prefill_batch;
                     entry.op_type = InflightOp::PREFILL;
@@ -615,4 +647,70 @@ ErrorCode Scheduler::removeFinishedSequenceById(size_t seq_id) {
         }
     }
     return ErrorCode::SEQUENCE_NOT_FOUND;
+}
+
+void Scheduler::applyPrefixProbeToPrefillBatch(Batch& prefill_batch) {
+    prefill_batch.prefill_full_hit_sequence_ids.clear();
+    bool prefix_probe_success = true;
+    if(prefill_batch.prefix_hit_tokens_per_seq.empty()){
+        LOG_ERROR("Prefix probe failed for batch " + std::to_string(prefill_batch.batch_id));
+        prefix_probe_success = false;
+    }
+    if(prefill_batch.prefix_hit_tokens_per_seq.size() != prefill_batch.batch_size){
+        LOG_ERROR("Prefix probe returned mismatched prefix hit tokens info for batch " + std::to_string(prefill_batch.batch_id));
+        prefix_probe_success = false;
+    }
+    if(prefill_batch.max_token_positions.size() != prefill_batch.batch_size){
+        LOG_ERROR("Prefill batch has mismatched max_token_positions for batch " + std::to_string(prefill_batch.batch_id));
+        prefix_probe_success = false;
+    }
+    if(!prefix_probe_success){
+        prefill_batch.prefix_hit_tokens_per_seq.clear();
+    }else{
+        LOG_DEBUG("Prefix probe succeeded for batch " + std::to_string(prefill_batch.batch_id) + 
+            ", prefix hit seq num: " + 
+            std::to_string(prefill_batch.prefix_hit_tokens_per_seq.size())
+        );
+        std::vector<size_t> new_prefix_hit_tokens;
+        new_prefix_hit_tokens.reserve(prefill_batch.batch_size);
+
+        size_t cursor = 0;
+        for(size_t seq_idx = 0; seq_idx < prefill_batch.batch_size; ++seq_idx) {
+            if (seq_idx >= prefill_batch.max_token_positions.size()) {
+                break;
+            }
+
+            const size_t seq_len = prefill_batch.max_token_positions[seq_idx] + 1;
+            if (cursor + seq_len > prefill_batch.token_ids.size() ||
+                cursor + seq_len > prefill_batch.token_positions.size() ||
+                cursor + seq_len > prefill_batch.sequence_ids.size()) {
+                LOG_ERROR("Prefill batch layout invalid while applying prefix probe for batch " + std::to_string(prefill_batch.batch_id));
+                break;
+            }
+
+            const size_t seq_id = prefill_batch.sequence_ids[cursor];
+            size_t hit_tokens = prefill_batch.prefix_hit_tokens_per_seq[seq_idx];
+            if (hit_tokens > seq_len) {
+                hit_tokens = seq_len;
+            }
+
+            if (hit_tokens >= seq_len) {
+                prefill_batch.prefill_full_hit_sequence_ids.push_back(seq_id);
+            }
+
+            // Keep full sequence payload in batch and only pass normalized hit tokens
+            // to workers. Worker side is responsible for binding cache blocks and
+            // deciding whether to skip prefill compute for fully hit sequences.
+            new_prefix_hit_tokens.push_back(hit_tokens);
+
+            cursor += seq_len;
+        }
+        prefill_batch.prefix_hit_tokens_per_seq.swap(new_prefix_hit_tokens);
+
+        LOG_DEBUG(
+            "PREFIX APPLY: batch_id=" + std::to_string(prefill_batch.batch_id) +
+            ", batch_size=" + std::to_string(prefill_batch.batch_size) +
+            ", num_tokens=" + std::to_string(prefill_batch.num_tokens)
+        );
+    }
 }

@@ -3,17 +3,19 @@
 #include "executor/Executor.h"
 #include "channel/Channel.h"
 #include "channel/ChannelMessage.h"
-#include "model/IModel.h"
 #include <deque>
 #include <mutex>
 #include "Batch.h"
 #include "model/ModelForwardContext.h"
 #include <thread>
 #include <atomic>
+#include <condition_variable>
+#include <unordered_map>
+#include <unordered_set>
 
 class PipelineCoordinatorExecutor : public Executor {
 public:
-    explicit PipelineCoordinatorExecutor(IModel* model = nullptr) : model(model) {}
+    PipelineCoordinatorExecutor() = default;
     ~PipelineCoordinatorExecutor();
 
     void set_channels(
@@ -36,17 +38,29 @@ public:
     void submit_prefill_batch(const Batch& batch);
     bool poll_completion(CompletionRecord& out_record) override;
 
+    ErrorCode run_prefix_probe(Batch& batch) override;
+
 private:
     void start_receive_thread();
     bool receive_and_track();
 
-    IModel* model = nullptr;
     Channel* to_worker0 = nullptr;
     Channel* from_worker_last = nullptr;
     bool last_forward_ok = true;
 
     std::deque<CompletionRecord> completed_records;
     std::mutex completion_mutex;
+
+    // For prefix probe synchronization
+    //  in pipeline mode, the coordinator needs to wait for the probe result
+    // this is to prevent from sending the prefill batches before handling the prefix hit
+    std::mutex probe_mutex;
+    std::condition_variable probe_cv;
+    std::unordered_map<size_t, Batch> probe_responses;
+    std::unordered_set<size_t> pending_probe_batches;
+    std::unordered_set<size_t> failed_probe_batches;
+    std::unordered_set<size_t> timed_out_probe_batches;
+
     std::thread receive_thread;
     std::atomic<bool> stop_receive_thread{false};
     std::atomic<bool> receiver_started{false};

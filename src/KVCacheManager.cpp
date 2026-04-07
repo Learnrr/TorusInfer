@@ -109,6 +109,7 @@ std::variant<std::shared_ptr<CacheBlock>, ErrorCode> KVCacheManager::allocate_ca
     }
     auto block = free_blocks.back();
     free_blocks.pop_back();
+    block->ref_count.store(1);
     used_blocks.push_back(block);
     return used_blocks.back();
 }
@@ -120,6 +121,7 @@ ErrorCode KVCacheManager::free_cache_block(size_t block_id) {
     auto it = std::find_if(used_blocks.begin(), used_blocks.end(), 
         [block_id](const std::shared_ptr<CacheBlock>& block) { return block->block_id == block_id; });
     if (it != used_blocks.end()) {
+        (*it)->ref_count.store(0);
         free_blocks.push_back(*it);
         used_blocks.erase(it);
         return ErrorCode::SUCCESS;
@@ -127,5 +129,45 @@ ErrorCode KVCacheManager::free_cache_block(size_t block_id) {
     std::ostringstream oss;
     oss << "Attempted to free invalid cache block: " << block_id;
     LOG_ERROR(oss.str());
+    return ErrorCode::INVALID_INPUT;
+}
+
+ErrorCode KVCacheManager::add_block_ref(size_t block_id) {
+    if (block_id >= num_blocks) {
+        return ErrorCode::INVALID_INPUT;
+    }
+    auto it = std::find_if(used_blocks.begin(), used_blocks.end(), 
+        [block_id](const std::shared_ptr<CacheBlock>& block) { return block->block_id == block_id; });
+    if (it != used_blocks.end()) {
+        (*it)->ref_count.fetch_add(1);
+        return ErrorCode::SUCCESS;
+    }
+    return ErrorCode::INVALID_INPUT;
+}
+
+ErrorCode KVCacheManager::release_block_ref(size_t block_id) {
+    if (block_id >= num_blocks) {
+        return ErrorCode::INVALID_INPUT;
+    }
+    auto it = std::find_if(used_blocks.begin(), used_blocks.end(), 
+        [block_id](const std::shared_ptr<CacheBlock>& block) { return block->block_id == block_id; });
+    if (it != used_blocks.end()) {
+        int old_ref_count = (*it)->ref_count.fetch_sub(1);
+        int new_ref_count = old_ref_count - 1;
+        if (new_ref_count < 0) {
+            std::ostringstream oss;
+            oss << "Cache block " << block_id << " reference count dropped below zero";
+            LOG_ERROR(oss.str());
+            (*it)->ref_count.store(0);
+            return ErrorCode::UNKNOWN_ERROR;
+        }
+
+        if (new_ref_count == 0) {
+            free_blocks.push_back(*it);
+            used_blocks.erase(it);
+        }
+
+        return ErrorCode::SUCCESS;
+    }
     return ErrorCode::INVALID_INPUT;
 }
