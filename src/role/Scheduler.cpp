@@ -10,15 +10,14 @@
 #include <unordered_set>
 
 Scheduler::Scheduler(
-    IModel* model,
     const LLMEngineConfig& engine_config
 )
     : seq_pool(std::make_unique<SequencePool>()),
     // initialize coordinator executor based on whether pipeline parallel is enabled
       coordinator(
           engine_config.enable_pipeline_parallel
-              ? std::unique_ptr<Executor>(std::make_unique<PipelineCoordinatorExecutor>(model))
-              : std::unique_ptr<Executor>(std::make_unique<CoordinatorExecutor>(model))
+              ? std::unique_ptr<Executor>(std::make_unique<PipelineCoordinatorExecutor>())
+              : std::unique_ptr<Executor>(std::make_unique<CoordinatorExecutor>())
       ),
       engine_config(engine_config),
       eos_token_id(engine_config.model_config.eos_token_id) {}

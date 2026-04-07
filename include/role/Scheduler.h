@@ -18,7 +18,6 @@
 #include <condition_variable>
 #include "role/Role.h"
 #include "channel/Channel.h"
-#include "model/IModel.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <deque>
@@ -38,7 +37,6 @@ class Scheduler: public Role {
     public:
 
     Scheduler(
-        IModel* model,
         const LLMEngineConfig& engine_config
     );
 

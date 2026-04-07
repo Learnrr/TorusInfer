@@ -3,7 +3,6 @@
 #include "executor/Executor.h"
 #include "channel/Channel.h"
 #include "channel/ChannelMessage.h"
-#include "model/IModel.h"
 #include <deque>
 #include <mutex>
 #include "Batch.h"
@@ -16,7 +15,7 @@
 
 class PipelineCoordinatorExecutor : public Executor {
 public:
-    explicit PipelineCoordinatorExecutor(IModel* model = nullptr) : model(model) {}
+    PipelineCoordinatorExecutor() = default;
     ~PipelineCoordinatorExecutor();
 
     void set_channels(
@@ -45,7 +44,6 @@ private:
     void start_receive_thread();
     bool receive_and_track();
 
-    IModel* model = nullptr;
     Channel* to_worker0 = nullptr;
     Channel* from_worker_last = nullptr;
     bool last_forward_ok = true;

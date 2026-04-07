@@ -3,14 +3,13 @@
 #include "executor/Executor.h"
 #include "channel/Channel.h"
 #include "channel/ChannelMessage.h"
-#include "model/IModel.h"
 #include "Batch.h"
 #include <deque>
 #include <mutex>
 
 class CoordinatorExecutor : public Executor {
 public:
-    explicit CoordinatorExecutor(IModel* model = nullptr) : model(model) {}
+    CoordinatorExecutor() = default;
 
     void set_channels(
         Channel* to_worker0,
@@ -34,7 +33,6 @@ public:
 private:
     void push_completion(CompletionRecord record);
 
-    IModel* model = nullptr;
     Channel* to_worker0 = nullptr;
     Channel* from_worker_last = nullptr;
     bool last_forward_ok = true;

@@ -36,7 +36,10 @@ void Engine::init(char* llm_engine_config_path) {
         ", enable_pipeline_parallel: " + (engine_config.enable_pipeline_parallel ? "true" : "false") +
         ", world_size: " + std::to_string(engine_config.world_size) +
         ", pipeline_rank: " + std::to_string(engine_config.pipeline_rank) +
-        ", local_device_id: " + std::to_string(engine_config.local_device_id)
+        ", local_device_id: " + std::to_string(engine_config.local_device_id) +
+        ", enable_prefix_cache: " + (engine_config.enable_prefix_cache ? "true" : "false") +
+        ", max_decode_batch_flight: " + std::to_string(engine_config.max_decode_batch_flight) +
+        ", max_prefill_batch_flight: " + std::to_string(engine_config.max_prefill_batch_flight)
     );    
 
     // build channels for the pipeline based on the engine configuration.
@@ -54,14 +57,9 @@ void Engine::init(char* llm_engine_config_path) {
         
         request_manager = std::make_unique<RequestManager>();
         LOG_INFO("RequestManager initialized");
-
-        //create model and load weights
-        model = ModelFactory::create_model("QWEN");
-        model->init(engine_config);
         
         //scheduler
         scheduler = std::make_unique<Scheduler>(
-            model.get(),
             engine_config
         );
 
