@@ -125,9 +125,17 @@ ErrorCode Worker::handle_local_forward(ForwardMessage& message) {
     context.workspace = workspace;
     context.seq_pool = seq_pool.get();
     if (message.op_type == ForwardOp::PREFILL) {
-        model_executor->run_prefill(batch, context);
+        ErrorCode prefill_error = model_executor->run_prefill(batch, context);
+        if (prefill_error != ErrorCode::SUCCESS) {
+            LOG_ERROR("Worker local PREFILL forward failed.");
+            return prefill_error;
+        }
     } else if (message.op_type == ForwardOp::DECODE) {
-        model_executor->run_decode(batch, context);
+        ErrorCode decode_error = model_executor->run_decode(batch, context);
+        if (decode_error != ErrorCode::SUCCESS) {
+            LOG_ERROR("Worker local DECODE forward failed.");
+            return decode_error;
+        }
     }
 
     return ErrorCode::SUCCESS;
@@ -174,9 +182,17 @@ ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external
         context.external_hidden_in = external_hidden_in;
         context.external_hidden_out = external_hidden_out;        
         if(message.op_type == ForwardOp::PREFILL){
-            model_executor->run_prefill(batch, context);
+            ErrorCode prefill_error = model_executor->run_prefill(batch, context);
+            if (prefill_error != ErrorCode::SUCCESS) {
+                LOG_ERROR("Worker first-stage PREFILL forward failed.");
+                return prefill_error;
+            }
         } else {
-            model_executor->run_decode(batch, context);
+            ErrorCode decode_error = model_executor->run_decode(batch, context);
+            if (decode_error != ErrorCode::SUCCESS) {
+                LOG_ERROR("Worker first-stage DECODE forward failed.");
+                return decode_error;
+            }
         }
         return ErrorCode::SUCCESS;
     }
@@ -276,9 +292,25 @@ ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external
     context.external_hidden_out = engine_config.is_last_stage() ? nullptr : external_hidden_out;
 
     if (message.op_type == ForwardOp::PREFILL) {
-        model_executor->run_prefill(batch, context);
+        ErrorCode prefill_error = model_executor->run_prefill(batch, context);
+        if (prefill_error != ErrorCode::SUCCESS) {
+            LOG_ERROR("Worker remote PREFILL forward failed.");
+            if (incoming_ready_event != nullptr) {
+                cudaEventDestroy(incoming_ready_event);
+            }
+            cudaIpcCloseMemHandle(remote_base_ptr);
+            return prefill_error;
+        }
     } else {
-        model_executor->run_decode(batch, context);
+        ErrorCode decode_error = model_executor->run_decode(batch, context);
+        if (decode_error != ErrorCode::SUCCESS) {
+            LOG_ERROR("Worker remote DECODE forward failed.");
+            if (incoming_ready_event != nullptr) {
+                cudaEventDestroy(incoming_ready_event);
+            }
+            cudaIpcCloseMemHandle(remote_base_ptr);
+            return decode_error;
+        }
     }
 
     // deal with handle and event cleanup after forward

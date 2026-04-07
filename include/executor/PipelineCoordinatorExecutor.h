@@ -53,6 +53,9 @@ private:
     std::deque<CompletionRecord> completed_records;
     std::mutex completion_mutex;
 
+    // For prefix probe synchronization
+    //  in pipeline mode, the coordinator needs to wait for the probe result
+    // this is to prevent from sending the prefill batches before handling the prefix hit
     std::mutex probe_mutex;
     std::condition_variable probe_cv;
     std::unordered_map<size_t, Batch> probe_responses;

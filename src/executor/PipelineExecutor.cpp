@@ -4,6 +4,12 @@
 
 ErrorCode PipelineExecutor::run_prefill(Batch& batch, ModelForwardContext& context) {
     model->stage_prefill_forward(batch, context);
+
+    ErrorCode prefix_cache_result = write_prefix_to_cache(batch);
+    if (prefix_cache_result != ErrorCode::SUCCESS) {
+        return prefix_cache_result;
+    }
+
     return ErrorCode::SUCCESS;
 }
 
@@ -79,7 +85,7 @@ ErrorCode PipelineExecutor::run_prefix_probe(Batch& batch) {
         const size_t seq_id = batch.sequence_ids[cursor];
         const size_t prefix_hit_tokens = batch.prefix_hit_tokens_per_seq[seq_idx];
         LOG_INFO(
-            "SingleCardExecutor prefix probe result for sequence " +
+            "PipelineExecutor prefix probe result for sequence " +
             std::to_string(seq_id) + ": " +
             std::to_string(prefix_hit_tokens) +
             " prefix tokens hit in cache."
@@ -137,7 +143,7 @@ ErrorCode PipelineExecutor::write_prefix_to_cache(const Batch& batch) {
                         &cached_blocks
                     );
                     if (upsert_error != ErrorCode::SUCCESS) {
-                        LOG_ERROR("SingleCardExecutor failed to upsert prefix cache entry for sequence " + std::to_string(seq_id));
+                        LOG_ERROR("PipelineExecutor failed to upsert prefix cache entry for sequence " + std::to_string(seq_id));
                         cursor = end;
                         continue;
                     }
@@ -151,7 +157,7 @@ ErrorCode PipelineExecutor::write_prefix_to_cache(const Batch& batch) {
                         for (size_t b = 0; b < blocks_to_pin; ++b) {
                             ErrorCode pin_err = cache_manager->add_block_ref(block_ids[b]);
                             if (pin_err != ErrorCode::SUCCESS) {
-                                LOG_ERROR("SingleCardExecutor failed to pin KV block ref for block_id=" + std::to_string(block_ids[b]));
+                                LOG_ERROR("PipelineExecutor failed to pin KV block ref for block_id=" + std::to_string(block_ids[b]));
                             }
                         }
                     }
