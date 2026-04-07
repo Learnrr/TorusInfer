@@ -17,10 +17,9 @@ Supported Model: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
 **1. clone to local**  
 `git clone ...`  
 **2. download weights**  
-`cd llm_infer_engine/weights`  
+`cd TorusInfer/weights`  
 `git lfs clone https://huggingface.co/Qwen/Qwen2.5-7B-Instruct`  
-**3. compile with make**  
-`cd llm_infer_engine`  
+**3. compile with make**    
 `make clean`  
 `make all`  
 **4. start serving**  
@@ -178,7 +177,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions   -H 'Content-Type: applicatio
 INFO:     127.0.0.1:43134 - "POST /v1/chat/completions HTTP/1.1" 200 OK  
 
 ## Benchmark (improving)   
-SIZE FOR KVCACHE: 2147483648 bytes configured in llm_engine_config.json  
+SIZE FOR KVCACHE: 2147483648 bytes configured in llm_engine_config*.json  
 ```
 python3 benchmark/benchmark_concurrency.py --base-url http://127.0.0.1:8000 --prompt "Write a short poem."  --requests 50  --concurrency 8 --top-p 1.0 --top-k 50 --max-tokens 128
 ```
