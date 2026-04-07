@@ -8,7 +8,7 @@ ErrorCode SingleCardExecutor::run_prefill(Batch& batch, ModelForwardContext& con
         return ErrorCode::INVALID_INPUT;
     }
     model->prefill_forward(batch, context);
-
+    
     ErrorCode prefix_cache_result = write_prefix_to_cache(batch);
     if (prefix_cache_result != ErrorCode::SUCCESS) {
         return prefix_cache_result;
@@ -38,7 +38,10 @@ ErrorCode SingleCardExecutor::run_free(Batch& batch) {
 
         for (const auto& block : seq->blocks) {
             if (block) {
-                cache_manager->free_cache_block(block->block_id);
+                ErrorCode release_err = cache_manager->release_block_ref(block->block_id);
+                if (release_err != ErrorCode::SUCCESS) {
+                    LOG_ERROR("SingleCardExecutor failed to release KV block ref for block_id=" + std::to_string(block->block_id));
+                }
             }
         }
         seq->blocks.clear();
@@ -103,8 +106,6 @@ ErrorCode SingleCardExecutor::write_prefix_to_cache(const Batch& batch) {
         return ErrorCode::SUCCESS;
     }
 
-    
-
     const size_t n = std::min(batch.token_ids.size(), std::min(batch.sequence_ids.size(), batch.token_positions.size()));
     size_t cursor = 0;
     while (cursor < n) {
@@ -137,9 +138,32 @@ ErrorCode SingleCardExecutor::write_prefix_to_cache(const Batch& batch) {
                 }
 
                 if (!block_ids.empty()) {
-                    ErrorCode upsert_error = prefix_cache_manager->upsert_prefix_entry(seq_tokens, block_ids);
+                    bool inserted = false;
+                    size_t cached_blocks = 0;
+                    ErrorCode upsert_error = prefix_cache_manager->upsert_prefix_entry(
+                        seq_tokens,
+                        block_ids,
+                        &inserted,
+                        &cached_blocks
+                    );
                     if (upsert_error != ErrorCode::SUCCESS) {
                         LOG_ERROR("SingleCardExecutor failed to upsert prefix cache entry for sequence " + std::to_string(seq_id));
+                        cursor = end;
+                        continue;
+                    }
+
+                    //only pin blocks for newly inserted cache entry to avoid 
+                    //duplicate refs for the same blocks for the same prefix
+
+                    // If inserted is false, it means the same prefix entry already exists in the cache
+                    if (inserted) {
+                        const size_t blocks_to_pin = std::min(cached_blocks, block_ids.size());
+                        for (size_t b = 0; b < blocks_to_pin; ++b) {
+                            ErrorCode pin_err = cache_manager->add_block_ref(block_ids[b]);
+                            if (pin_err != ErrorCode::SUCCESS) {
+                                LOG_ERROR("SingleCardExecutor failed to pin KV block ref for block_id=" + std::to_string(block_ids[b]));
+                            }
+                        }
                     }
                 }
             }

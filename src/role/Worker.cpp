@@ -98,7 +98,14 @@ ErrorCode Worker::allocate_blocks(ForwardMessage& message) {
         }
 
         auto& blocks = seq->blocks;
-        while (blocks.size() < required_blk_idx) {
+        // prefix binding may have already attached some blocks.
+        //only allocate missing blocks to reach required block count.
+        if (blocks.size() >= required_blk_idx) {
+            continue;
+        }
+
+        const size_t missing_blocks = required_blk_idx - blocks.size();
+        for (size_t i = 0; i < missing_blocks; ++i) {
             auto result = cache_manager->allocate_cache_block();
             if (std::holds_alternative<std::shared_ptr<CacheBlock>>(result)) {
                 blocks.push_back(std::get<std::shared_ptr<CacheBlock>>(result));
@@ -276,20 +283,21 @@ ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external
     return ErrorCode::SUCCESS;
 }
 // external hidden out is from model forward
-ErrorCode Worker::build_response_and_send(ForwardMessage& message, void* external_hidden_out) {
+ErrorCode Worker::build_response_and_send(ForwardMessage& message, void* external_hidden_out, const Batch* transport_batch_override) {
     //build message for scheduler
     ForwardMessage response;
     const Batch& batch = message.batch;
+    const Batch& transport_batch = (transport_batch_override != nullptr) ? *transport_batch_override : batch;
     if(engine_config.is_last_stage()){
         response.op_type = ForwardOp::DONE;
-        response.batch = batch;
+        response.batch = transport_batch;
         // for the last stage worker, already append sampled token ids in model execution
-        response.batch.token_ids = batch.token_ids;
+        response.batch.token_ids = transport_batch.token_ids;
         response.batch.sampled_token_ids = batch.sampled_token_ids;
         response.batch.num_tokens = response.batch.token_ids.size();
     } else { //build message for next stage worker
         response.op_type = message.op_type;
-        response.batch = batch;
+        response.batch = transport_batch;
 
         if (external_hidden_out == nullptr) {
             LOG_ERROR("Worker did not produce external_hidden_out for next pipeline stage.");
@@ -384,7 +392,7 @@ void Worker::work() {
             stop_requested.store(true);
             break;
         }
-        // if receive done signal, just forward to next stage and continue to wait for next message
+        // if receive invalid signal, just forward to next stage and continue to wait for next message
         if (message.op_type == ForwardOp::INVALID) {
             send(message);
             continue;
@@ -464,8 +472,9 @@ void Worker::work() {
             continue;
         }
 
-        // handle prefill/decode message
-        Batch& batch = message.batch;
+        // Handle prefill/decode with a compute copy so transport metadata can stay intact.
+        ForwardMessage forward_message = message;
+        Batch& batch = forward_message.batch;
 
         //handle error case for malformed batch
         batch.num_tokens = batch.num_tokens > 0 ? batch.num_tokens : batch.token_ids.size();
@@ -487,8 +496,45 @@ void Worker::work() {
             send(invalid_response);
             continue;
         }
+
+        if(engine_config.enable_prefix_cache&& message.op_type == ForwardOp::PREFILL){
+            //attach hit blocks info for prefix caching
+            ErrorCode bind_error = bind_cacheblocks_for_batch(batch);
+            if (bind_error != ErrorCode::SUCCESS) {
+                ForwardMessage invalid_response;
+                invalid_response.op_type = ForwardOp::INVALID;
+                invalid_response.batch.batch_id = message.batch.batch_id;
+                invalid_response.batch.sequence_ids = message.batch.sequence_ids;
+                send(invalid_response);
+                continue;
+            }
+
+            //remove already hit prefix tokens from prefill compute payload.
+            ErrorCode trim_error = trim_prefill_batch_after_prefix_bind(batch);
+            if (trim_error != ErrorCode::SUCCESS) {
+                ForwardMessage invalid_response;
+                invalid_response.op_type = ForwardOp::INVALID;
+                invalid_response.batch.batch_id = message.batch.batch_id;
+                invalid_response.batch.sequence_ids = message.batch.sequence_ids;
+                send(invalid_response);
+                continue;
+            }
+
+            if(batch.num_tokens == 0){
+                // if after trimming prefix hit tokens, there is no more token to prefill, we can directly send a DONE response to next stage or scheduler
+                ForwardMessage done_response;
+                done_response.op_type = engine_config.is_last_stage() ? ForwardOp::DONE : ForwardOp::PREFILL;
+                done_response.batch = message.batch;
+                ErrorCode send_error = send(done_response);
+                if (send_error != ErrorCode::SUCCESS) {
+                    LOG_ERROR("Worker failed to forward DONE response for fully prefix-hit batch.");
+                }
+                continue;
+            }
+        }     
+       
         //allocate blocks for the batch before forward
-        ErrorCode alloc_error = allocate_blocks(message);
+        ErrorCode alloc_error = allocate_blocks(forward_message);
         if (alloc_error != ErrorCode::SUCCESS) {
             ForwardMessage invalid_response;
             invalid_response.op_type = ForwardOp::INVALID;
@@ -502,9 +548,9 @@ void Worker::work() {
         void* external_hidden_out = nullptr;
         ErrorCode forward_error = ErrorCode::SUCCESS;
         if(!engine_config.enable_pipeline_parallel) {
-            forward_error = handle_local_forward(message);
+            forward_error = handle_local_forward(forward_message);
         } else {
-            forward_error = handle_remote_forward(message, &external_hidden_out);
+            forward_error = handle_remote_forward(forward_message, &external_hidden_out);
         }
         if (forward_error != ErrorCode::SUCCESS) {
             ForwardMessage invalid_response;
@@ -515,7 +561,11 @@ void Worker::work() {
             continue;
         }
         // build response message and send to next stage or scheduler
-        ErrorCode send_response_error = build_response_and_send(message, external_hidden_out);
+        const Batch* transport_batch_override = nullptr;
+        if (engine_config.enable_prefix_cache && message.op_type == ForwardOp::PREFILL) {
+            transport_batch_override = &message.batch;
+        }
+        ErrorCode send_response_error = build_response_and_send(forward_message, external_hidden_out, transport_batch_override);
         if (send_response_error != ErrorCode::SUCCESS) {
             ForwardMessage invalid_response;
             invalid_response.op_type = ForwardOp::INVALID;
@@ -564,3 +614,157 @@ ErrorCode Worker::send(const ForwardMessage& message) {
 }
 
 
+ErrorCode Worker::bind_cacheblocks_for_batch(const Batch& batch){
+    if (prefix_cache_manager == nullptr) {
+        return ErrorCode::SUCCESS;
+    }
+    if (batch.prefix_hit_tokens_per_seq.size() != batch.batch_size ||
+        batch.max_token_positions.size() != batch.batch_size) {
+        LOG_ERROR("Worker received invalid prefix hit metadata for binding.");
+        return ErrorCode::INVALID_INPUT;
+    }
+
+    size_t cursor = 0;
+    for (size_t seq_idx = 0; seq_idx < batch.batch_size; ++seq_idx) {
+        const size_t seq_len = batch.max_token_positions[seq_idx] + 1;
+        if (cursor + seq_len > batch.sequence_ids.size() ||
+            cursor + seq_len > batch.token_ids.size()) {
+            LOG_ERROR("Worker prefill batch layout invalid for prefix cache binding.");
+            return ErrorCode::INVALID_INPUT;
+        }
+
+        const size_t seq_id = batch.sequence_ids[cursor];
+        const size_t hit_tokens = std::min(batch.prefix_hit_tokens_per_seq[seq_idx], seq_len);
+        const size_t hit_blocks = hit_tokens / engine_config.block_size;
+        if (hit_blocks == 0) {
+            cursor += seq_len;
+            continue;
+        }
+
+        auto seq = seq_pool->get(seq_id);
+        if (!seq) {
+            seq = seq_pool->create(seq_id);
+        }
+
+        // If blocks are already bound for this prefix avoid duplicating refs.
+        if (seq->blocks.size() >= hit_blocks) {
+            cursor += seq_len;
+            continue;
+        }
+
+        std::vector<size_t> token_ids_for_seq(
+            batch.token_ids.begin() + cursor,
+            batch.token_ids.begin() + cursor + (hit_blocks * engine_config.block_size)
+        );
+
+        std::vector<size_t> block_ids;
+        ErrorCode lookup_err = prefix_cache_manager->get_cache_block_ids(token_ids_for_seq, block_ids);
+        if (lookup_err != ErrorCode::SUCCESS || block_ids.size() < hit_blocks) {
+            LOG_ERROR("Worker failed to lookup prefix cache block ids for sequence " + std::to_string(seq_id));
+            return ErrorCode::UNKNOWN_ERROR;
+        }
+
+        for (size_t b = seq->blocks.size(); b < hit_blocks; ++b) {
+            const size_t block_id = block_ids[b];
+            auto cache_block = cache_manager->get_cache_block(block_id);
+            if (!std::holds_alternative<std::shared_ptr<CacheBlock>>(cache_block)) {
+                LOG_ERROR("Worker failed to get cache block " + std::to_string(block_id) + " for prefix cache binding.");
+                return ErrorCode::UNKNOWN_ERROR;
+            }
+
+            ErrorCode add_ref_err = cache_manager->add_block_ref(block_id);
+            if (add_ref_err != ErrorCode::SUCCESS) {
+                LOG_ERROR("Worker failed to add cache block ref for block " + std::to_string(block_id));
+                return add_ref_err;
+            }
+            seq->blocks.push_back(std::get<std::shared_ptr<CacheBlock>>(cache_block));
+        }
+
+        cursor += seq_len;
+    }
+
+    return ErrorCode::SUCCESS;
+}
+
+ErrorCode Worker::trim_prefill_batch_after_prefix_bind(Batch& batch) {
+    if (batch.batch_size == 0) {
+        batch.token_ids.clear();
+        batch.token_positions.clear();
+        batch.sequence_ids.clear();
+        batch.num_tokens = 0;
+        return ErrorCode::SUCCESS;
+    }
+
+    if (batch.prefix_hit_tokens_per_seq.size() != batch.batch_size ||
+        batch.max_token_positions.size() != batch.batch_size) {
+        LOG_ERROR("Worker received invalid prefix hit metadata for prefill trimming.");
+        return ErrorCode::INVALID_INPUT;
+    }
+
+    std::vector<size_t> trimmed_token_ids;
+    std::vector<size_t> trimmed_token_positions;
+    std::vector<size_t> trimmed_sequence_ids;
+    std::vector<size_t> trimmed_max_token_positions;
+    std::vector<size_t> normalized_hits;
+
+    trimmed_token_ids.reserve(batch.token_ids.size());
+    trimmed_token_positions.reserve(batch.token_positions.size());
+    trimmed_sequence_ids.reserve(batch.sequence_ids.size());
+    trimmed_max_token_positions.reserve(batch.batch_size);
+    normalized_hits.reserve(batch.batch_size);
+
+    size_t cursor = 0;
+    for (size_t seq_idx = 0; seq_idx < batch.batch_size; ++seq_idx) {
+        const size_t seq_len = batch.max_token_positions[seq_idx] + 1;
+        if (cursor + seq_len > batch.token_ids.size() ||
+            cursor + seq_len > batch.token_positions.size() ||
+            cursor + seq_len > batch.sequence_ids.size()) {
+            LOG_ERROR("Worker prefill batch layout invalid while trimming bound prefix tokens.");
+            return ErrorCode::INVALID_INPUT;
+        }
+
+        size_t hit_tokens = std::min(batch.prefix_hit_tokens_per_seq[seq_idx], seq_len);
+        //binding is block granularity; only trim whole-block hits from compute payload.
+        hit_tokens = (hit_tokens / engine_config.block_size) * engine_config.block_size;
+
+        if (hit_tokens >= seq_len) {
+            cursor += seq_len;
+            continue;
+        }
+
+        const size_t keep_begin = cursor + hit_tokens;
+        const size_t keep_len = seq_len - hit_tokens;
+
+        trimmed_token_ids.insert(
+            trimmed_token_ids.end(),
+            batch.token_ids.begin() + keep_begin,
+            batch.token_ids.begin() + keep_begin + keep_len
+        );
+        trimmed_token_positions.insert(
+            trimmed_token_positions.end(),
+            batch.token_positions.begin() + keep_begin,
+            batch.token_positions.begin() + keep_begin + keep_len
+        );
+        trimmed_sequence_ids.insert(
+            trimmed_sequence_ids.end(),
+            batch.sequence_ids.begin() + keep_begin,
+            batch.sequence_ids.begin() + keep_begin + keep_len
+        );
+
+        // max_token_positions is interpreted as query-count-1 for prefill read-cache metadata.
+        trimmed_max_token_positions.push_back(keep_len - 1);
+        normalized_hits.push_back(hit_tokens);
+
+        cursor += seq_len;
+    }
+
+    batch.token_ids.swap(trimmed_token_ids);
+    batch.token_positions.swap(trimmed_token_positions);
+    batch.sequence_ids.swap(trimmed_sequence_ids);
+    batch.max_token_positions.swap(trimmed_max_token_positions);
+    batch.prefix_hit_tokens_per_seq.swap(normalized_hits);
+    batch.batch_size = batch.max_token_positions.size();
+    batch.num_tokens = batch.token_ids.size();
+
+    return ErrorCode::SUCCESS;
+}

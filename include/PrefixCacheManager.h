@@ -47,8 +47,13 @@ class PrefixCacheManager {
         }
         ~PrefixCacheManager() = default;
         ErrorCode get_longest_prefix(Batch& batch);
-        ErrorCode upsert_prefix_entry(const std::vector<size_t>& token_ids, const std::vector<size_t>& block_ids);
-
+        ErrorCode upsert_prefix_entry(
+            const std::vector<size_t>& token_ids,
+            const std::vector<size_t>& block_ids,
+            bool* inserted = nullptr,
+            size_t* cached_blocks = nullptr
+        );
+        ErrorCode get_cache_block_ids(const std::vector<size_t>& token_ids, std::vector<size_t>& out_block_ids);
     private:
     LLMEngineConfig engine_config;
     // prefix hash -> prefix entry idx in prefix_entries

@@ -232,6 +232,20 @@ void Scheduler::schedule() {
                     recoverFromPrefillFailure(prefill_batch);
                     continue;
                 } else{
+                    // handle full hit sequences that can be directly moved to PREFILLED state without running prefill forward.
+                    if (!prefill_batch.prefill_full_hit_sequence_ids.empty()) {
+                        std::unordered_set<size_t> full_hit_unique(
+                            prefill_batch.prefill_full_hit_sequence_ids.begin(),
+                            prefill_batch.prefill_full_hit_sequence_ids.end()
+                        );
+                        for (size_t seq_id : full_hit_unique) {
+                            auto seq = seq_pool->get(seq_id);
+                            if (seq && seq->state == SequenceState::PREFILLING) {
+                                seq->state = SequenceState::PREFILLED;
+                            }
+                        }
+                    }
+
                     InflightEntry entry;
                     entry.batch = prefill_batch;
                     entry.op_type = InflightOp::PREFILL;
@@ -625,6 +639,7 @@ ErrorCode Scheduler::removeFinishedSequenceById(size_t seq_id) {
 }
 
 void Scheduler::applyPrefixProbeToPrefillBatch(Batch& prefill_batch) {
+    prefill_batch.prefill_full_hit_sequence_ids.clear();
     bool prefix_probe_success = true;
     if(prefill_batch.prefix_hit_tokens_per_seq.empty()){
         LOG_ERROR("Prefix probe failed for batch " + std::to_string(prefill_batch.batch_id));
@@ -645,16 +660,7 @@ void Scheduler::applyPrefixProbeToPrefillBatch(Batch& prefill_batch) {
             ", prefix hit seq num: " + 
             std::to_string(prefill_batch.prefix_hit_tokens_per_seq.size())
         );
-        std::vector<size_t> new_token_ids;
-        std::vector<size_t> new_token_positions;
-        std::vector<size_t> new_sequence_ids;
-        std::vector<size_t> new_max_token_positions;
         std::vector<size_t> new_prefix_hit_tokens;
-
-        new_token_ids.reserve(prefill_batch.token_ids.size());
-        new_token_positions.reserve(prefill_batch.token_positions.size());
-        new_sequence_ids.reserve(prefill_batch.sequence_ids.size());
-        new_max_token_positions.reserve(prefill_batch.batch_size);
         new_prefix_hit_tokens.reserve(prefill_batch.batch_size);
 
         size_t cursor = 0;
@@ -678,39 +684,22 @@ void Scheduler::applyPrefixProbeToPrefillBatch(Batch& prefill_batch) {
             }
 
             if (hit_tokens >= seq_len) {
-                auto seq = seq_pool->get(seq_id);
-                if (seq && seq->state == SequenceState::PREFILLING) {
-                    seq->state = SequenceState::PREFILLED;
-                }
-            } else {
-                const size_t suffix_len = seq_len - hit_tokens;
-                for (size_t j = hit_tokens; j < seq_len; ++j) {
-                    new_token_ids.push_back(prefill_batch.token_ids[cursor + j]);
-                    new_token_positions.push_back(prefill_batch.token_positions[cursor + j]);
-                    new_sequence_ids.push_back(prefill_batch.sequence_ids[cursor + j]);
-                }
-                // max_token_positions is used as per-sequence query length marker in prefill path.
-                // After trimming prefix hits, it must match suffix tokens kept in this batch.
-                new_max_token_positions.push_back(suffix_len - 1);
-                new_prefix_hit_tokens.push_back(hit_tokens);
+                prefill_batch.prefill_full_hit_sequence_ids.push_back(seq_id);
             }
+
+            // Keep full sequence payload in batch and only pass normalized hit tokens
+            // to workers. Worker side is responsible for binding cache blocks and
+            // deciding whether to skip prefill compute for fully hit sequences.
+            new_prefix_hit_tokens.push_back(hit_tokens);
 
             cursor += seq_len;
         }
-
-        prefill_batch.token_ids.swap(new_token_ids);
-        prefill_batch.token_positions.swap(new_token_positions);
-        prefill_batch.sequence_ids.swap(new_sequence_ids);
-        prefill_batch.max_token_positions.swap(new_max_token_positions);
         prefill_batch.prefix_hit_tokens_per_seq.swap(new_prefix_hit_tokens);
-
-        prefill_batch.num_tokens = prefill_batch.token_ids.size();
-        prefill_batch.batch_size = prefill_batch.max_token_positions.size();
 
         LOG_DEBUG(
             "PREFIX APPLY: batch_id=" + std::to_string(prefill_batch.batch_id) +
-            ", remaining_batch_size=" + std::to_string(prefill_batch.batch_size) +
-            ", remaining_num_tokens=" + std::to_string(prefill_batch.num_tokens)
+            ", batch_size=" + std::to_string(prefill_batch.batch_size) +
+            ", num_tokens=" + std::to_string(prefill_batch.num_tokens)
         );
     }
 }

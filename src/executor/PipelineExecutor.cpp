@@ -51,7 +51,10 @@ ErrorCode PipelineExecutor::run_free(Batch& batch) {
 
         for (const auto& block : seq->blocks) {
             if (block) {
-                cache_manager->free_cache_block(block->block_id);
+                ErrorCode release_err = cache_manager->release_block_ref(block->block_id);
+                if (release_err != ErrorCode::SUCCESS) {
+                    LOG_ERROR("PipelineExecutor failed to release KV block ref for block_id=" + std::to_string(block->block_id));
+                }
             }
         }
         seq->blocks.clear();

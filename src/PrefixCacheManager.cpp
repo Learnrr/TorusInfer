@@ -6,10 +6,22 @@
 
 ErrorCode PrefixCacheManager::upsert_prefix_entry(
     const std::vector<size_t>& token_ids,
-    const std::vector<size_t>& block_ids
+    const std::vector<size_t>& block_ids,
+    bool* inserted,
+    size_t* cached_blocks
 ) {
 
+    if (inserted != nullptr) {
+        *inserted = false;
+    }
+    if (cached_blocks != nullptr) {
+        *cached_blocks = 0;
+    }
+
     const size_t full_blocks = std::min(token_ids.size() / engine_config.block_size, block_ids.size());
+    if (cached_blocks != nullptr) {
+        *cached_blocks = full_blocks;
+    }
     if (full_blocks == 0) {
         return ErrorCode::SUCCESS;
     }
@@ -50,6 +62,10 @@ ErrorCode PrefixCacheManager::upsert_prefix_entry(
     const std::vector<uint64_t>& hashes = prefix_entries.back().block_hashes;
     for (uint64_t h : hashes) {
         prefix_cache[h].push_back(new_idx);
+    }
+    // If reach here, it means a new entry is inserted.
+    if (inserted != nullptr) {
+        *inserted = true;
     }
 
     return ErrorCode::SUCCESS;
@@ -131,3 +147,36 @@ ErrorCode PrefixCacheManager::get_longest_prefix(Batch& batch) {
     return ErrorCode::SUCCESS;
 }
 
+ErrorCode PrefixCacheManager::get_cache_block_ids(
+    const std::vector<size_t>& token_ids, 
+    std::vector<size_t>& out_block_ids
+){
+    std::vector<uint64_t> block_hashes = build_block_hashes(token_ids, engine_config.block_size);
+    for(size_t blk_idx = block_hashes.size(); blk_idx > 0; --blk_idx){
+        const uint64_t prefix_hash = block_hashes[blk_idx - 1];
+        auto cache_it = prefix_cache.find(prefix_hash);
+        if(cache_it == prefix_cache.end()){
+            continue;
+        }
+
+        const std::vector<size_t>& candidate_entry_idxs = cache_it->second;
+        for(size_t entry_idx : candidate_entry_idxs){
+            if(entry_idx >= prefix_entries.size()){
+                continue;
+            }
+            const PrefixEntry& entry = prefix_entries[entry_idx];
+            if(entry.cached_tokens < blk_idx * engine_config.block_size || entry.prefix_tokens.size() < blk_idx * engine_config.block_size){
+                continue;
+            }
+            if (entry.block_ids.size() < blk_idx) {
+                continue;
+            }
+
+            if(std::equal(token_ids.begin(), token_ids.begin() + blk_idx * engine_config.block_size, entry.prefix_tokens.begin())){
+                out_block_ids.assign(entry.block_ids.begin(), entry.block_ids.begin() + blk_idx);
+                return ErrorCode::SUCCESS;
+            }
+        }
+    }
+    return ErrorCode::SUCCESS;
+}

@@ -85,6 +85,8 @@ class Worker: public Role {
         ErrorCode allocate_blocks(ForwardMessage& message);
         ErrorCode handle_remote_forward(ForwardMessage& message, void** external_hidden_out);
         ErrorCode handle_local_forward(ForwardMessage& message);
-        ErrorCode build_response_and_send(ForwardMessage& message, void* external_hidden_out);
+        ErrorCode build_response_and_send(ForwardMessage& message, void* external_hidden_out, const Batch* transport_batch_override = nullptr);
+        ErrorCode bind_cacheblocks_for_batch(const Batch& batch);
+        ErrorCode trim_prefill_batch_after_prefix_bind(Batch& batch);
 
 };
