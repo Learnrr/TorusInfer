@@ -21,24 +21,36 @@ void QWEN_Model::init(LLMEngineConfig& config) {
         LOG_INFO(oss.str());
     }
 
-    weights = std::make_unique<ModelWeights>();
-    ErrorCode error = weights->init(config.model_config);
+    weights = std::make_unique<ModelWeights>(config);
+    ErrorCode error = weights->init();
     if (error != ErrorCode::SUCCESS) {
         LOG_ERROR("Failed to initialize model weights");
         return;
     }
     LOG_INFO("Model weights initialized successfully");
+    
     // Create embedding layer
-    embedding =  std::make_unique<Embedding>(
-        config.model_config, 
-        weights->layout.embedding_weights
-    );            
-    LOG_INFO("Initialized Embedding layer");
+    if(config.enable_pipeline_parallel && !config.is_first_stage()) {
+        LOG_DEBUG("Skipping embedding layer initialization for non-first pipeline stage");
+    } else {
+        embedding = std::make_unique<Embedding>(
+            config.model_config, 
+            weights->layout.embedding_weights
+        );            
+        LOG_INFO("Initialized Embedding layer");
+    }
     
     layers.reserve(config.model_config.num_hidden_layers + 2); // +2 for layer norm and lm head
 
     // Create transformer layers
     for(size_t i = 0; i < config.model_config.num_hidden_layers; ++i) {
+        if(config.enable_pipeline_parallel) {
+            if(i < stage_start_layer || i >= stage_end_layer) {
+                LOG_DEBUG("Skipping transformer layer " + std::to_string(i) + " for pipeline stage");
+                layers.push_back(nullptr);
+                continue;
+            }
+        }
         auto layer_config = config.model_config.get_layer_config<TransformerLayerConfig>(i);
         if (layer_config == nullptr) {
             LOG_ERROR("Missing TransformerLayerConfig in model config");
@@ -66,6 +78,12 @@ void QWEN_Model::init(LLMEngineConfig& config) {
     }
     LOG_INFO("Initialized all Transformer layers");
     // Create final layer norm
+    if(config.enable_pipeline_parallel && !config.is_last_stage()) {
+        LOG_DEBUG("Skipping final layer norm initialization for non-last pipeline stage");
+        return;
+    } else {
+        LOG_INFO("Initializing final layer norm for last pipeline stage");
+    }
     LayerNormLayerConfig layernorm_config;
     layernorm_config.norm_size = config.model_config.hidden_size;
     auto layernorm_config_ptr = config.model_config.get_layer_config<LayerNormLayerConfig>(config.model_config.num_hidden_layers);
@@ -380,14 +398,7 @@ void QWEN_Model::stage_prefill_forward(Batch& batch, ModelForwardContext& model_
     size_t end_layer = model_context.end_layer;
     void* external_hidden_in = model_context.external_hidden_in;
     LOG_DEBUG("Entered QWEN_Model::stage_prefill_forward");
-    if (!embedding || layers.size() < config.model_config.num_hidden_layers + 2) {
-        std::ostringstream oss;
-        oss << "QWEN_Model is not fully initialized before stage_prefill_forward"
-             << " embedding: " << (embedding ? "initialized" : "null")
-             << " layers: " << layers.size() << "/" << (config.model_config.num_hidden_layers + 2);
-        LOG_ERROR(oss.str());
-        return;
-    }
+
     if (start_layer > end_layer || end_layer > config.model_config.num_hidden_layers) {
         LOG_ERROR("Invalid layer range in stage_prefill_forward");
         return;
@@ -412,7 +423,7 @@ void QWEN_Model::stage_prefill_forward(Batch& batch, ModelForwardContext& model_
         {batch.num_tokens, config.model_config.hidden_size},
         config.model_config.data_type
     );
-    if(start_layer == 0) {
+    if(config.is_first_stage()) {
         LOG_DEBUG("Running Embedding forward in stage_prefill_forward");
         embedding->forward(batch.token_ids, hidden, batch.num_tokens);
     } else {
@@ -474,15 +485,7 @@ void QWEN_Model::stage_decode_forward(Batch& batch, ModelForwardContext& model_c
     size_t end_layer = model_context.end_layer;
     void* external_hidden_in = model_context.external_hidden_in;
     LOG_DEBUG("Entered QWEN_Model::stage_decode_forward");
-    if (!embedding || !post_processor || layers.size() < config.model_config.num_hidden_layers + 2) {
-        std::ostringstream oss;
-        oss << "QWEN_Model is not fully initialized before stage_decode_forward"
-             << " embedding: " << (embedding ? "initialized" : "null")
-             << " post_processor: " << (post_processor ? "initialized" : "null")
-             << " layers: " << layers.size() << "/" << (config.model_config.num_hidden_layers + 2);
-        LOG_ERROR(oss.str());
-        return;
-    }
+
     if (start_layer > end_layer || end_layer > config.model_config.num_hidden_layers) {
         LOG_ERROR("Invalid layer range in stage_decode_forward");
         return;
@@ -507,7 +510,7 @@ void QWEN_Model::stage_decode_forward(Batch& batch, ModelForwardContext& model_c
         {batch.num_tokens, config.model_config.hidden_size},
         config.model_config.data_type
     );
-    if(start_layer == 0) {
+    if(config.is_first_stage()) {
         LOG_DEBUG("Running Embedding forward in stage_decode_forward");
         embedding->forward(batch.token_ids, hidden, batch.num_tokens);
     } else {

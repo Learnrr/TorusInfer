@@ -1,5 +1,6 @@
 #pragma once
 #include "ModelConfig.h"
+#include "llm_engine_config.h"
 #include "cuda_runtime.h"
 #include "define.h"
 #include "Tensor.h"
@@ -54,6 +55,7 @@ struct TransformerLayerWeightLayout : public LayerWeightLayout {
 
 struct WeightLayout{
     WeightLayout(void* weights_ptr = nullptr): weights(weights_ptr) {}
+    const LLMEngineConfig* engine_config = nullptr;
     Tensor embedding_weights;
 
     std::vector<std::shared_ptr<LayerWeightLayout>> layer_weights;
@@ -90,10 +92,12 @@ struct WeightHeader {
 
 class ModelWeights {
     public: 
-        ModelWeights(){};
+        ModelWeights(LLMEngineConfig engine_config): engine_config(std::move(engine_config)) {
+            layout.engine_config = &this->engine_config;
+        }
         ~ModelWeights(){};
 
-        ErrorCode init(const ModelConfig& config);
+        ErrorCode init();
         
         ErrorCode parse_header(const char* file_name);
 
@@ -110,11 +114,15 @@ class ModelWeights {
         //copy from cpu to gpu
         ErrorCode load_weights(const char* weight_path);
 
-        std::variant<ErrorCode, size_t> read_total_size(const char* model_safetensors_index_json);
+        std::variant<ErrorCode, size_t> read_total_size(const char* model_safetensors_index_json) const;
+
+        std::variant<ErrorCode, size_t> get_actual_size() const;
 
         void* weights;
         std::unordered_map<std::string, WeightHeader> headers;
         std::vector<std::string> weight_names;
         WeightLayout layout;
+
+        LLMEngineConfig engine_config;
 
     };

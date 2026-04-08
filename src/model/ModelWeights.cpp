@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <sstream>
 #include <utility>
+#include <algorithm>
 #include <unordered_set>
 #include <unordered_map>
 #include "utils/tensor_debug.h"
@@ -59,7 +60,6 @@ std::vector<std::string> ResolveSafetensorShards(const std::string& model_path) 
     return ResolveSafetensorShardsFromIndex(index_path);
 }
 
-
 ErrorCode WeightLayout::build_weight_layout(
     const ModelConfig& config
 ) {
@@ -77,22 +77,40 @@ ErrorCode WeightLayout::build_weight_layout(
     }
     layer_weights.clear();
     layer_weights.reserve(config.layer_configs.size());
-    //embedding weights
-    embedding_weights = Tensor(
-        config.vocab_size * config.hidden_size,
-        static_cast<void*>(static_cast<char*>(weights) + offset),
-        {config.vocab_size, config.hidden_size},
-        layout_dtype
-    );
-    offset += embedding_weights.size;
-    {
-        std::ostringstream oss;
-        oss << "layout embedding done, bytes=" << embedding_weights.size << ", offset=" << offset;
-        LOG_DEBUG(oss.str());
+
+    if (!engine_config->enable_pipeline_parallel || engine_config->is_first_stage()) {
+        //embedding weights
+        embedding_weights = Tensor(
+            config.vocab_size * config.hidden_size,
+            static_cast<void*>(static_cast<char*>(weights) + offset),
+            {config.vocab_size, config.hidden_size},
+            layout_dtype
+        );
+        offset += embedding_weights.size;
+        {
+            std::ostringstream oss;
+            oss << "layout embedding done, bytes=" << embedding_weights.size << ", offset=" << offset;
+            LOG_DEBUG(oss.str());
+        }
     }
-    //transformer layers
+    
+    //transformer layers and layernorm and lm head
     size_t cfg_idx = 0;
     for (const auto& layer_cfg_base : config.layer_configs) {
+        if (engine_config->enable_pipeline_parallel) {
+            bool keep_cfg = true;
+            const size_t num_layers = config.num_hidden_layers;
+            if (cfg_idx < num_layers) {
+                keep_cfg = (cfg_idx >= engine_config->stage_start_layer && cfg_idx < engine_config->stage_end_layer);
+            } else if (cfg_idx == num_layers || cfg_idx == num_layers + 1) {
+                keep_cfg = engine_config->is_last_stage();
+            }
+            if (!keep_cfg) {
+                layer_weights.push_back(nullptr);
+                ++cfg_idx;
+                continue;
+            }
+        }
         if (!layer_cfg_base) {
             std::ostringstream oss;
             oss << "null layer config at index=" << cfg_idx;
@@ -299,7 +317,7 @@ ErrorCode WeightLayout::build_weight_layout(
     return ErrorCode::SUCCESS;
 }
 
-std::variant<ErrorCode, size_t> ModelWeights::read_total_size(const char* model_safetensors_index_json) {
+std::variant<ErrorCode, size_t> ModelWeights::read_total_size(const char* model_safetensors_index_json) const {
     size_t total_size = 0;
     std::ifstream infile(model_safetensors_index_json, std::ios::binary);
     if (!infile.is_open()) {
@@ -320,23 +338,47 @@ std::variant<ErrorCode, size_t> ModelWeights::read_total_size(const char* model_
     }
     return ErrorCode::LOAD_ERROR;
 }
-    
-ErrorCode ModelWeights::init(const ModelConfig& config){
-    LOG_DEBUG("ModelWeights::init begin");
 
-    //parse header
-    ErrorCode error = parse_header(config.model_path.c_str());
-    if (error != ErrorCode::SUCCESS) {
-        LOG_ERROR("Failed to parse model weight header");
-        return error;
+std::variant<ErrorCode, size_t> ModelWeights::get_actual_size() const {
+    size_t actual_size = 0;
+    if(!engine_config.enable_pipeline_parallel){
+        //read total size from safetensors index json
+        auto total_size_or_error = read_total_size(
+            engine_config.model_config.model_safetensors_index_json.c_str()
+        );
+        if (std::holds_alternative<ErrorCode>(total_size_or_error)) {
+            LOG_ERROR("Failed to read total size from safetensors index");
+            return std::get<ErrorCode>(total_size_or_error);
+        }
+        {
+            std::ostringstream oss;
+            oss << "read_total_size success, bytes=" << std::get<size_t>(total_size_or_error);
+            LOG_DEBUG(oss.str());
+        }
+        actual_size = std::get<size_t>(total_size_or_error);
+    }else{
+        //if pipeline parallel enabled, each rank only loads part of weights
+        for (const auto& header_pair : headers) {
+            if (std::find(weight_names.begin(), weight_names.end(), header_pair.first) == weight_names.end()) {
+                continue;
+            }
+            const WeightHeader& header = header_pair.second;
+            size_t weight_size = header.offset_end - header.offset_start;
+            actual_size += weight_size;
+        }
+        {
+            std::ostringstream oss;
+            oss << "calculated actual size from headers, bytes=" << actual_size;
+            LOG_DEBUG(oss.str());
+        }
     }
-    {
-        std::ostringstream oss;
-        oss << "parse_header success, headers=" << headers.size();
-        LOG_DEBUG(oss.str());
-    }
+    return actual_size;
+}
+    
+ErrorCode ModelWeights::init(){
+    LOG_DEBUG("ModelWeights::init begin");
     //build weight names list in sequence
-    error = build_weight_names(config.weight_names_path.c_str());
+    ErrorCode error = build_weight_names(engine_config.model_config.weight_names_path.c_str());
     if (error != ErrorCode::SUCCESS) {
         LOG_ERROR("Failed to build weight names list");
         return error;
@@ -346,21 +388,26 @@ ErrorCode ModelWeights::init(const ModelConfig& config){
         oss << "build_weight_names success, weight_names=" << weight_names.size();
         LOG_DEBUG(oss.str());
     }
-    //read total size from safetensors index json
-    auto total_size_or_error = read_total_size(
-        config.model_safetensors_index_json.c_str()
-    );
-    if (std::holds_alternative<ErrorCode>(total_size_or_error)) {
-        LOG_ERROR("Failed to read total size from safetensors index");
-        return std::get<ErrorCode>(total_size_or_error);
+    //parse header
+    error = parse_header(engine_config.model_config.model_path.c_str());
+    if (error != ErrorCode::SUCCESS) {
+        LOG_ERROR("Failed to parse model weight header");
+        return error;
     }
     {
         std::ostringstream oss;
-        oss << "read_total_size success, bytes=" << std::get<size_t>(total_size_or_error);
+        oss << "parse_header success, headers=" << headers.size();
         LOG_DEBUG(oss.str());
     }
+
+    auto actual_size_or_error = get_actual_size();
+    if (std::holds_alternative<ErrorCode>(actual_size_or_error)) {
+        LOG_ERROR("Failed to get actual size");
+        return std::get<ErrorCode>(actual_size_or_error);
+    }
+    size_t allocated_bytes = std::get<size_t>(actual_size_or_error);
+
     //allocate gpu memory for weights
-    const size_t allocated_bytes = std::get<size_t>(total_size_or_error);
     cudaError_t cuda_err = cudaMalloc(&weights, allocated_bytes);
     if (cuda_err != cudaSuccess) {
         LOG_ERROR("Failed to allocate GPU memory for model weights ");
@@ -380,8 +427,8 @@ ErrorCode ModelWeights::init(const ModelConfig& config){
     LOG_DEBUG("calling build_weight_layout");
     layout.weights = weights;
 
-    ModelConfig effective_config = config;
-    DataType effective_dtype = config.data_type;
+    ModelConfig effective_config = engine_config.model_config;
+    DataType effective_dtype = effective_config.data_type;
 
     auto embed_it = headers.find("model.embed_tokens.weight");
     if (embed_it != headers.end()) {
@@ -390,10 +437,10 @@ ErrorCode ModelWeights::init(const ModelConfig& config){
         effective_dtype = headers.begin()->second.dtype;
     }
 
-    if (effective_dtype != config.data_type) {
+    if (effective_dtype != engine_config.model_config.data_type) {
         std::ostringstream oss;
         oss << "Model config dtype differs from safetensors dtype, config="
-            << static_cast<int>(config.data_type)
+            << static_cast<int>(engine_config.model_config.data_type)
             << ", effective=" << static_cast<int>(effective_dtype)
             << ". Using effective dtype for layout.";
         LOG_INFO(oss.str());
@@ -564,6 +611,8 @@ ErrorCode ModelWeights::build_weight_names(const char* file_name){
     }
 
     weight_names.clear();
+    size_t total_weight_names = 0;
+    size_t filtered_out_weight_names = 0;
     std::string line;
     while (std::getline(infile, line)) {
         const size_t begin = line.find_first_not_of(" \t\r\n");
@@ -575,12 +624,51 @@ ErrorCode ModelWeights::build_weight_names(const char* file_name){
         if (name.empty()) {
             continue;
         }
+
+        total_weight_names++;
+        // if pipeline parallel, filter out weights that do not belong to current stage
+        if (engine_config.enable_pipeline_parallel) {
+            const size_t start_layer = engine_config.stage_start_layer;
+            const size_t end_layer = engine_config.stage_end_layer;
+            const size_t num_layers = engine_config.model_config.num_hidden_layers;
+
+            bool keep = false;
+            if (name == "model.embed_tokens.weight") {
+                keep = engine_config.is_first_stage();
+            } else if (name == "model.norm.weight" || name == "lm_head.weight") {
+                keep = engine_config.is_last_stage();
+            } else {
+                const std::string marker = "model.layers.";
+                const size_t marker_pos = name.find(marker);
+                if (marker_pos != std::string::npos) {
+                    const size_t id_begin = marker_pos + marker.size();
+                    const size_t id_end = name.find('.', id_begin);
+                    if (id_end != std::string::npos && id_end > id_begin) {
+                        const std::string layer_str = name.substr(id_begin, id_end - id_begin);
+                        if (!layer_str.empty()) {
+                            const size_t layer_id = static_cast<size_t>(std::stoull(layer_str));
+                            keep = (layer_id >= start_layer && layer_id < end_layer);
+                        }
+                    }
+                }
+            }
+
+            if (!keep) {
+                filtered_out_weight_names++;
+                continue;
+            }
+        }
+
         weight_names.push_back(name);
     }
 
     {
         std::ostringstream oss;
-        oss << "build_weight_names loaded=" << weight_names.size();
+        oss << "build_weight_names loaded=" << weight_names.size()
+            << ", total=" << total_weight_names
+            << ", filtered_out=" << filtered_out_weight_names
+            << ", pipeline=" << (engine_config.enable_pipeline_parallel ? "true" : "false")
+            << ", stage=[" << engine_config.stage_start_layer << ", " << engine_config.stage_end_layer << ")";
         LOG_DEBUG(oss.str());
     }
 
