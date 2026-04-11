@@ -38,26 +38,50 @@ void Engine::init(char* llm_engine_config_path) {
         ", pipeline_rank: " + std::to_string(engine_config.pipeline_rank) +
         ", local_device_id: " + std::to_string(engine_config.local_device_id) +
         ", enable_prefix_cache: " + (engine_config.enable_prefix_cache ? "true" : "false") +
+        ", enable_pd_disaggregation: " + (engine_config.enable_pd_disaggregation ? "true" : "false") +
+        ", pd_role: " + engine_config.pd_role +
         ", max_decode_batch_flight: " + std::to_string(engine_config.max_decode_batch_flight) +
         ", max_prefill_batch_flight: " + std::to_string(engine_config.max_prefill_batch_flight)
     );    
 
     // build channels for the pipeline based on the engine configuration.
     ErrorCode channel_error = ChannelManager::get_instance()->build_channels(
-        engine_config.role,
-        engine_config.world_size,
-        engine_config.pipeline_rank
+        engine_config
     );
     if (channel_error != ErrorCode::SUCCESS) {
         LOG_ERROR("Failed to build channels for the pipeline.");
         return;
     }
-    //scheduler view
-    if(engine_config.role == "scheduler"){
-        
+
+    if(engine_config.enable_pd_disaggregation && engine_config.role == "router"){
+
         request_manager = std::make_unique<RequestManager>();
-        LOG_INFO("RequestManager initialized");
-        
+        LOG_INFO("RequestManager initialized");        
+        //router setup
+        router = std::make_unique<Router>(
+            engine_config
+        );
+        LOG_INFO("Router initialized");
+
+        //attach communication channels with scheduler and workers
+        attach_channel();
+        LOG_INFO("Router attached channels and initialized");    
+        metric_calculator = std::make_unique<MetricCalculator>();
+        LOG_INFO("MetricCalculator initialized");           
+        return;
+
+        LOG_INFO("Engine initialized with role: router in pd disaggregation mode");
+    }
+    //scheduler view
+    else if(engine_config.role == "scheduler"){
+        if(!engine_config.enable_pd_disaggregation){
+            request_manager = std::make_unique<RequestManager>();
+            LOG_INFO("RequestManager initialized"); 
+
+            metric_calculator = std::make_unique<MetricCalculator>();
+            LOG_INFO("MetricCalculator initialized");              
+        }
+
         //scheduler
         scheduler = std::make_unique<Scheduler>(
             engine_config
@@ -66,9 +90,7 @@ void Engine::init(char* llm_engine_config_path) {
         //attach communication channels with workers
         attach_channel();
         LOG_INFO("Scheduler initialized");
-        metric_calculator = std::make_unique<MetricCalculator>();
-        LOG_INFO("MetricCalculator initialized");   
-
+ 
         LOG_INFO("Engine initialized with role: scheduler");
     } else if(engine_config.role == "worker"){
         //set CUDA device for worker only
@@ -129,6 +151,9 @@ void Engine::run() {
     if(engine_config.role == "scheduler"){
         runner_thread = std::thread(&Scheduler::run, scheduler.get());
         LOG_INFO("Scheduler started");
+    } else if(engine_config.role == "router"){
+        runner_thread = std::thread(&Router::run, router.get());
+        LOG_INFO("Router started");
     } else if(engine_config.role == "worker"){
         runner_thread = std::thread(&Worker::run, worker.get());
         LOG_INFO("Worker started");
@@ -138,7 +163,7 @@ void Engine::run() {
     }
 }   
 
-//================= scheduler side functions==========================
+//================= router/scheduler side functions==========================
 void Engine::submit_tokens(std::vector<size_t> token_ids, const SequenceConfig& sequence_config, size_t& request_id){
     request_id = 0;
     create_request(token_ids, request_id);
@@ -199,14 +224,25 @@ void Engine::submit_request(size_t request_id, const SequenceConfig& sequence_co
         return;
     }
 
-    //create the sequence corresponding to the request in scheduler
-    //at this point the sequence is created corresponding to the sequence id
-    error = scheduler->addSequence(seq_id, token_ids, sequence_config);
-    if (error != ErrorCode::SUCCESS) {
-        // Handle error
-        request_manager->set_request_status(request_id, RequestStatus::FAILED);
-        return;
+    if(engine_config.enable_pd_disaggregation && engine_config.role == "router"){
+        error = router->add_sequence(seq_id, token_ids, sequence_config);
+        if (error != ErrorCode::SUCCESS) {
+            // Handle error
+            request_manager->set_request_status(request_id, RequestStatus::FAILED);
+            return;
+        }
     }
+    else if(!engine_config.enable_pd_disaggregation && engine_config.role == "scheduler"){
+        //create the sequence corresponding to the request in scheduler
+        //at this point the sequence is created corresponding to the sequence id
+        error = scheduler->addSequence(seq_id, token_ids, sequence_config);
+        if (error != ErrorCode::SUCCESS) {
+            // Handle error
+            request_manager->set_request_status(request_id, RequestStatus::FAILED);
+            return;
+        }
+    }
+
 
 }
 
@@ -218,17 +254,36 @@ void Engine::get_request_output(size_t request_id, SequenceOutput& output) {
     }
 
     std::shared_ptr<Sequence> seq;
-    error = scheduler->getSequenceById(seq_id, seq);
-    if (error != ErrorCode::SUCCESS) {
+    ErrorCode seq_error = ErrorCode::SUCCESS;
+    if(engine_config.enable_pd_disaggregation && engine_config.role == "router") {
+        seq_error = router->getSequenceById(seq_id, seq);
+    } else if (!engine_config.enable_pd_disaggregation && engine_config.role == "scheduler") {
+        seq_error = scheduler->getSequenceById(seq_id, seq);
+    }
+    if (seq_error != ErrorCode::SUCCESS) {
         // Handle error
         request_manager->set_request_status(request_id, RequestStatus::FAILED);
         return;
     }
-    std::unique_lock<std::mutex> lock(seq->mtx);
-    seq->cv.wait(lock, [&seq]{ return seq->state == SequenceState::FINISHED; });
+    
+    if (engine_config.enable_pd_disaggregation && engine_config.role == "router") {
+        ErrorCode wait_error = router->wait_until_finished(seq_id);
+        if (wait_error != ErrorCode::SUCCESS) {
+            request_manager->set_request_status(request_id, RequestStatus::FAILED);
+            return;
+        }
+    } else if (!engine_config.enable_pd_disaggregation && engine_config.role == "scheduler") {
+        ErrorCode wait_error = scheduler->wait_until_finished(seq_id);
+        if (wait_error != ErrorCode::SUCCESS) {
+            request_manager->set_request_status(request_id, RequestStatus::FAILED);
+            return;
+        }
+    }
+
     output.seq_id = seq->seq_id;
     output.token_ids = seq->token_ids;
 
+    //TODO: metrics are not supported inPD disaggregation now
     //calculate metrics for the sequence
     size_t latency = metric_calculator->calculateLatency(*seq);
     size_t itl = metric_calculator->calculateITL(*seq);
@@ -240,7 +295,11 @@ void Engine::get_request_output(size_t request_id, SequenceOutput& output) {
     + std::to_string(tpot) + "ms" + ", TTFT=" + std::to_string(ttft) + "ms");
 
     //remove the sequence from finished queue
-    scheduler->removeFinishedSequenceById(seq_id);
+    if(engine_config.enable_pd_disaggregation && engine_config.role == "router") {
+        router->removeFinishedSequenceById(seq_id);
+    } else if (!engine_config.enable_pd_disaggregation && engine_config.role == "scheduler") {
+        scheduler->removeFinishedSequenceById(seq_id);
+    }
     //update request status to completed
     request_manager->set_request_status(request_id, RequestStatus::COMPLETED);
 }
@@ -253,6 +312,11 @@ void Engine::check_request_state(size_t request_id, RequestStatus& state) {
 }
 
 void Engine::attach_channel() {
+    if (engine_config.role == "router" && router) {
+        router->set_channels();
+        return;
+    }
+
     if (engine_config.role == "scheduler" && scheduler) {
         scheduler->set_channels();
         return;

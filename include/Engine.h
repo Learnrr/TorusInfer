@@ -6,6 +6,7 @@
 #include "Workspace.h"
 #include "role/Scheduler.h"
 #include "role/Worker.h"
+#include "role/Router.h"
 #include "Sequence.h"
 #include "model/IModel.h"
 #include "Tensor.h"
@@ -58,6 +59,7 @@ class Engine{
         std::unique_ptr<IModel> model;
         std::unique_ptr<Scheduler> scheduler;
         std::unique_ptr<Worker> worker;
+        std::unique_ptr<Router> router;
 
         std::unique_ptr<KVCacheManager> cache_manager;
         std::unique_ptr<Workspace> workspace;

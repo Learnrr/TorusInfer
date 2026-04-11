@@ -49,6 +49,7 @@ class Scheduler: public Role {
         ErrorCode addSequence(size_t seq_id, std::vector<size_t> token_ids, const SequenceConfig& sequence_config = SequenceConfig());
 
         ErrorCode getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq);
+        ErrorCode wait_until_finished(size_t seq_id);
 
         ErrorCode getFinishedSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq);
 
@@ -64,9 +65,11 @@ class Scheduler: public Role {
         std::vector<size_t> decoding_queue;
         std::vector<size_t> prefilling_queue;
         std::vector<size_t> finished_queue;
+        std::vector<size_t> prefill_report_pending_queue;
+        std::vector<size_t> decode_report_pending_queue;
 
         std::unique_ptr<SequencePool> seq_pool;
-
+        // protect the route states, queues and sequence store
         std::mutex queue_mutex;
         std::condition_variable queue_cv;
 
@@ -76,24 +79,45 @@ class Scheduler: public Role {
         std::atomic<bool> stop_requested{false};
         std::atomic<uint64_t> next_batch_id{1};
 
+        //function logic extracted for better readability
         ErrorCode movePrefilledToDecoding(const Batch& prefill_batch);
         ErrorCode moveDecodingToFinished(const Batch& decode_batch);
         std::variant<Batch, ErrorCode> buildDecodeBatch();
-        std::variant<Batch, ErrorCode> buildPrefillBatch();
-        ErrorCode launchSequence();
+        std::variant<Batch, ErrorCode> buildPrefillBatch(); 
         ErrorCode handleFinishedSequence();
         void appendDecodedTokens(Batch& decode_batch);
         void freeFinishedSequencesOnWorkers(const std::vector<size_t>& sequence_ids);
-        void stopWorkers();
         void recoverFromPrefillFailure(const Batch& prefill_batch);
         void recoverFromDecodeFailure(const Batch& decode_batch);
         bool hasPendingWorkLocked() const;
         bool hasRunnableDecodeWork();
         void applyPrefixProbeToPrefillBatch(Batch& prefill_batch);
+        bool canRunDecode() const;
+        bool canRunPrefill() const;
+        
+        // main schedule logic
+        ErrorCode launchSequence();
+        void phaseAReceiveRouterCommands();
+        void drainCompletionRecords();
+        void submitDecodePath();
+        void submitPrefillPath();
+        void handleFinishedAndReport();
+        void stopWorkers();
+        
 
         std::unordered_map<size_t, InflightEntry> decode_inflight_batches; // batch_id -> inflight entry
         std::unordered_map<size_t, InflightEntry> prefill_inflight_batches; // batch_id -> inflight entry
         // set of sequence ids that are currently in decoding
         // prevent the same sequence from being included in multiple inflight decode batches
         std::unordered_set<size_t> sequences_in_decoding; 
+
+        //PD disaggregation related members
+        
+        // communication with router
+        Channel* to_router_channel = nullptr;
+        Channel* from_router_channel = nullptr;
+        void send_finished_prefill_to_router();
+        void send_finished_decode_to_router();
+        void handleRouterFreeSeq(size_t seq_id);
+        
 };

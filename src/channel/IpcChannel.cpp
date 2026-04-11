@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fcntl.h>
+#include <algorithm>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
@@ -134,4 +135,77 @@ void IpcChannel::receive(ChannelMessage& message) {
     }
 
     message.deserialize(payload);
+}
+
+bool IpcChannel::try_receive(ChannelMessage& message) {
+    if (!ensure_open()) {
+        LOG_ERROR("IpcChannel try_receive failed: fifo open not ready");
+        return false;
+    }
+
+    int flags = fcntl(read_fd, F_GETFL, 0);
+    if (flags < 0) {
+        LOG_ERROR("IpcChannel try_receive failed: fcntl(F_GETFL) failed");
+        return false;
+    }
+
+    bool changed_flags = false;
+    if ((flags & O_NONBLOCK) == 0) {
+        if (fcntl(read_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+            LOG_ERROR("IpcChannel try_receive failed: fcntl(F_SETFL O_NONBLOCK) failed");
+            return false;
+        }
+        changed_flags = true;
+    }
+
+    char temp[4096];
+    while (true) {
+        const ssize_t n = read(read_fd, temp, sizeof(temp));
+        if (n > 0) {
+            recv_buffer.insert(recv_buffer.end(), temp, temp + n);
+            continue;
+        }
+
+        if (n == 0) {
+            break;
+        }
+
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            break;
+        }
+
+        LOG_ERROR("IpcChannel try_receive failed: read failed");
+        if (changed_flags) {
+            fcntl(read_fd, F_SETFL, flags);
+        }
+        return false;
+    }
+
+    if (changed_flags) {
+        fcntl(read_fd, F_SETFL, flags);
+    }
+
+    if (recv_buffer.size() < sizeof(uint64_t)) {
+        return false;
+    }
+
+    uint64_t payload_size = 0;
+    std::memcpy(&payload_size, recv_buffer.data(), sizeof(payload_size));
+    const size_t frame_size = sizeof(uint64_t) + static_cast<size_t>(payload_size);
+
+    if (recv_buffer.size() < frame_size) {
+        return false;
+    }
+
+    std::vector<char> payload(static_cast<size_t>(payload_size));
+    if (payload_size > 0) {
+        std::memcpy(payload.data(), recv_buffer.data() + sizeof(uint64_t), static_cast<size_t>(payload_size));
+    }
+    recv_buffer.erase(recv_buffer.begin(), recv_buffer.begin() + static_cast<std::ptrdiff_t>(frame_size));
+
+    message.deserialize(payload);
+    return true;
 }

@@ -6,6 +6,7 @@
 #include <vector>
 #include <cuda_runtime_api.h>
 #include "Batch.h"
+#include "Sequence.h"
 
 class ChannelMessage {
     public:
@@ -30,6 +31,15 @@ enum class ForwardOp : uint8_t {
     //for prefix caching
     PREFIX_PROBE = 9, 
     PREFIX_PROBE_RESPONSE = 10,
+};
+
+enum class RouteType : uint8_t {
+    PREFILL = 0,
+    PREFILLED = 1,
+    DECODE = 2,
+    FINISHED = 3,
+    FAILED = 4,
+    FREE_SEQ = 5,
 };
 
 struct ForwardMessage : public ChannelMessage {
@@ -281,6 +291,305 @@ struct ForwardMessage : public ChannelMessage {
                 cuda_ipc_event_handle_bytes.size()
             );
             offset += cuda_ipc_event_handle_bytes.size();
+        }
+    }
+};
+
+struct RouteMessage : public ChannelMessage {
+    //sequence related information for building sequence in scheduler
+    size_t seq_id;
+    SequenceConfig sequence_config;
+    std::vector<size_t> token_ids;
+
+    RouteType route_type;
+
+    std::vector<char> serialize() const override {
+        const size_t total =
+            sizeof(seq_id) +
+            sizeof(route_type) +
+            sizeof(sequence_config.temperature) +
+            sizeof(sequence_config.top_p) +
+            sizeof(sequence_config.top_k) +
+            sizeof(sequence_config.max_tokens) +
+            sizeof(sequence_config.presence_penalty) +
+            sizeof(sequence_config.frequency_penalty) +
+            sizeof(size_t) +
+            token_ids.size() * sizeof(size_t);
+
+        std::vector<char> data(total);
+
+        auto write_scalar = [&data](size_t& offset, auto value) {
+            std::memcpy(data.data() + offset, &value, sizeof(value));
+            offset += sizeof(value);
+        };
+
+        size_t offset = 0;
+        write_scalar(offset, seq_id);
+        write_scalar(offset, route_type);
+        write_scalar(offset, sequence_config.temperature);
+        write_scalar(offset, sequence_config.top_p);
+        write_scalar(offset, sequence_config.top_k);
+        write_scalar(offset, sequence_config.max_tokens);
+        write_scalar(offset, sequence_config.presence_penalty);
+        write_scalar(offset, sequence_config.frequency_penalty);
+
+        const size_t token_count = token_ids.size();
+        write_scalar(offset, token_count);
+        if (token_count > 0) {
+            std::memcpy(data.data() + offset, token_ids.data(), token_count * sizeof(size_t));
+            offset += token_count * sizeof(size_t);
+        }
+        return data;
+    }
+
+    void deserialize(const std::vector<char>& data) override {
+        token_ids.clear();
+
+        auto read_scalar = [&data](size_t& offset, auto& out) -> bool {
+            if (offset + sizeof(out) > data.size()) {
+                return false;
+            }
+            std::memcpy(&out, data.data() + offset, sizeof(out));
+            offset += sizeof(out);
+            return true;
+        };
+
+        size_t offset = 0;
+        if (!read_scalar(offset, seq_id)) {
+            return;
+        }
+        if (!read_scalar(offset, route_type)) {
+            return;
+        }
+        if (!read_scalar(offset, sequence_config.temperature)) {
+            return;
+        }
+        if (!read_scalar(offset, sequence_config.top_p)) {
+            return;
+        }
+        if (!read_scalar(offset, sequence_config.top_k)) {
+            return;
+        }
+        if (!read_scalar(offset, sequence_config.max_tokens)) {
+            return;
+        }
+        if (!read_scalar(offset, sequence_config.presence_penalty)) {
+            return;
+        }
+        if (!read_scalar(offset, sequence_config.frequency_penalty)) {
+            return;
+        }
+
+        size_t token_count = 0;
+        if (!read_scalar(offset, token_count)) {
+            return;
+        }
+        if (offset + token_count * sizeof(size_t) > data.size()) {
+            return;
+        }
+        token_ids.resize(token_count);
+        if (token_count > 0) {
+            std::memcpy(token_ids.data(), data.data() + offset, token_count * sizeof(size_t));
+            offset += token_count * sizeof(size_t);
+        }
+    }
+};
+
+enum class TransferType : uint8_t {
+    UNKNOWN = 0,
+    KV_PULL_REQ = 1,
+    KV_READY = 2,
+};
+
+struct TransferMessage : public ChannelMessage {
+    TransferType transfer_type = TransferType::UNKNOWN;
+    bool ok = true;
+    bool has_key_cuda_ipc_handle = false;
+    bool has_value_cuda_ipc_handle = false;
+    std::array<char, sizeof(cudaIpcMemHandle_t)> key_cuda_ipc_handle_bytes{};
+    std::array<char, sizeof(cudaIpcMemHandle_t)> value_cuda_ipc_handle_bytes{};
+    // Batch-style transfer metadata.
+    // seq_block_offsets size should be seq_ids.size() + 1.
+    // The range length for each sequence means requested/ready full KV block count,
+    // with implicit logical indices [1..count].
+    std::vector<size_t> seq_ids;
+    std::vector<size_t> seq_block_offsets;
+
+    void set_key_cuda_ipc_handle(const cudaIpcMemHandle_t& handle) {
+        std::memcpy(key_cuda_ipc_handle_bytes.data(), &handle, sizeof(handle));
+        has_key_cuda_ipc_handle = true;
+    }
+
+    void set_value_cuda_ipc_handle(const cudaIpcMemHandle_t& handle) {
+        std::memcpy(value_cuda_ipc_handle_bytes.data(), &handle, sizeof(handle));
+        has_value_cuda_ipc_handle = true;
+    }
+
+    cudaIpcMemHandle_t key_cuda_ipc_handle() const {
+        cudaIpcMemHandle_t handle{};
+        std::memcpy(&handle, key_cuda_ipc_handle_bytes.data(), sizeof(handle));
+        return handle;
+    }
+
+    cudaIpcMemHandle_t value_cuda_ipc_handle() const {
+        cudaIpcMemHandle_t handle{};
+        std::memcpy(&handle, value_cuda_ipc_handle_bytes.data(), sizeof(handle));
+        return handle;
+    }
+
+    std::vector<char> serialize() const override {
+        auto vec_bytes = [](const std::vector<size_t>& v) {
+            return sizeof(size_t) + v.size() * sizeof(size_t);
+        };
+
+        const size_t total =
+            sizeof(transfer_type) +
+            sizeof(uint8_t) +
+            sizeof(uint8_t) +
+            sizeof(uint8_t) +
+            key_cuda_ipc_handle_bytes.size() +
+            value_cuda_ipc_handle_bytes.size() +
+            vec_bytes(seq_ids) +
+            vec_bytes(seq_block_offsets);
+
+        std::vector<char> data(total);
+        auto write_scalar = [&data](size_t& offset, auto value) {
+            std::memcpy(data.data() + offset, &value, sizeof(value));
+            offset += sizeof(value);
+        };
+
+        auto write_vector = [&data, &write_scalar](size_t& offset, const std::vector<size_t>& v) {
+            const size_t len = v.size();
+            write_scalar(offset, len);
+            if (len > 0) {
+                std::memcpy(data.data() + offset, v.data(), len * sizeof(size_t));
+                offset += len * sizeof(size_t);
+            }
+        };
+
+        size_t offset = 0;
+        write_scalar(offset, transfer_type);
+        write_scalar(offset, static_cast<uint8_t>(ok ? 1 : 0));
+        write_scalar(offset, static_cast<uint8_t>(has_key_cuda_ipc_handle ? 1 : 0));
+        write_scalar(offset, static_cast<uint8_t>(has_value_cuda_ipc_handle ? 1 : 0));
+        std::memcpy(
+            data.data() + offset,
+            key_cuda_ipc_handle_bytes.data(),
+            key_cuda_ipc_handle_bytes.size()
+        );
+        offset += key_cuda_ipc_handle_bytes.size();
+        std::memcpy(
+            data.data() + offset,
+            value_cuda_ipc_handle_bytes.data(),
+            value_cuda_ipc_handle_bytes.size()
+        );
+        offset += value_cuda_ipc_handle_bytes.size();
+        write_vector(offset, seq_ids);
+        write_vector(offset, seq_block_offsets);
+
+        return data;
+    }
+
+    void deserialize(const std::vector<char>& data) override {
+        transfer_type = TransferType::UNKNOWN;
+        ok = false;
+        has_key_cuda_ipc_handle = false;
+        has_value_cuda_ipc_handle = false;
+        key_cuda_ipc_handle_bytes.fill(0);
+        value_cuda_ipc_handle_bytes.fill(0);
+        seq_ids.clear();
+        seq_block_offsets.clear();
+
+        auto read_scalar = [&data](size_t& offset, auto& out) -> bool {
+            if (offset + sizeof(out) > data.size()) {
+                return false;
+            }
+            std::memcpy(&out, data.data() + offset, sizeof(out));
+            offset += sizeof(out);
+            return true;
+        };
+
+        auto read_vector = [&data, &read_scalar](size_t& offset, std::vector<size_t>& out) -> bool {
+            size_t len = 0;
+            if (!read_scalar(offset, len)) {
+                return false;
+            }
+            if (offset + len * sizeof(size_t) > data.size()) {
+                return false;
+            }
+            out.resize(len);
+            if (len > 0) {
+                std::memcpy(out.data(), data.data() + offset, len * sizeof(size_t));
+                offset += len * sizeof(size_t);
+            }
+            return true;
+        };
+
+        size_t offset = 0;
+        if (!read_scalar(offset, transfer_type)) {
+            return;
+        }
+
+        uint8_t ok_u8 = 0;
+        if (!read_scalar(offset, ok_u8)) {
+            return;
+        }
+        ok = (ok_u8 != 0);
+
+        uint8_t has_key_handle_u8 = 0;
+        if (!read_scalar(offset, has_key_handle_u8)) {
+            return;
+        }
+        has_key_cuda_ipc_handle = (has_key_handle_u8 != 0);
+
+        uint8_t has_value_handle_u8 = 0;
+        if (!read_scalar(offset, has_value_handle_u8)) {
+            return;
+        }
+        has_value_cuda_ipc_handle = (has_value_handle_u8 != 0);
+
+        if (offset + key_cuda_ipc_handle_bytes.size() > data.size()) {
+            return;
+        }
+        std::memcpy(
+            key_cuda_ipc_handle_bytes.data(),
+            data.data() + offset,
+            key_cuda_ipc_handle_bytes.size()
+        );
+        offset += key_cuda_ipc_handle_bytes.size();
+
+        if (offset + value_cuda_ipc_handle_bytes.size() > data.size()) {
+            return;
+        }
+        std::memcpy(
+            value_cuda_ipc_handle_bytes.data(),
+            data.data() + offset,
+            value_cuda_ipc_handle_bytes.size()
+        );
+        offset += value_cuda_ipc_handle_bytes.size();
+
+        if (!read_vector(offset, seq_ids)) {
+            return;
+        }
+        if (!read_vector(offset, seq_block_offsets)) {
+            return;
+        }
+
+        if (!seq_block_offsets.empty()) {
+            if (seq_block_offsets.size() != seq_ids.size() + 1) {
+                seq_ids.clear();
+                seq_block_offsets.clear();
+                ok = false;
+                return;
+            }
+            for (size_t i = 1; i < seq_block_offsets.size(); ++i) {
+                if (seq_block_offsets[i] < seq_block_offsets[i - 1]) {
+                    seq_ids.clear();
+                    seq_block_offsets.clear();
+                    ok = false;
+                    return;
+                }
+            }
         }
     }
 };
