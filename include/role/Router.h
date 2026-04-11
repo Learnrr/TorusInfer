@@ -32,6 +32,7 @@ class Router: public Role {
         void from_prefiller_handler();
         void from_decoder_handler();
         ErrorCode wait_until_finished(size_t seq_id);
+        ErrorCode send_free_seq_to_schedulers(size_t seq_id);
 
         ErrorCode getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq);
         ErrorCode removeFinishedSequenceById(size_t seq_id);

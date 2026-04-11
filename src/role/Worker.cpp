@@ -930,7 +930,8 @@ void Worker::work() {
             }
 
             if(batch.num_tokens == 0){
-                // if after trimming prefix hit tokens, there is no more token to prefill, we can directly send a DONE response to next stage or scheduler
+                // if after trimming prefix hit tokens, there is no more token to prefill, 
+                //we can directly send a DONE response to next stage or scheduler
                 ForwardMessage done_response;
                 done_response.op_type = engine_config.is_last_stage() ? ForwardOp::DONE : ForwardOp::PREFILL;
                 done_response.batch = message.batch;
@@ -1015,6 +1016,39 @@ void Worker::cleanup_retained_events() {
     retained_outgoing_events.clear();
 }
 
+ErrorCode Worker::receive_pull_req() {
+    constexpr size_t kTransferDrainBudget = 8;
+    size_t handled_transfer = 0;
+    TransferMessage transfer_message;
+
+    while (handled_transfer < kTransferDrainBudget &&
+           from_peer_transfer->try_receive(transfer_message)) {
+        if (transfer_message.transfer_type != TransferType::KV_PULL_REQ) {
+            ++handled_transfer;
+            continue;
+        }
+
+        TransferMessage ready;
+        ready.transfer_type = TransferType::KV_READY;
+        ready.seq_ids = transfer_message.seq_ids;
+        ready.seq_block_offsets = transfer_message.seq_block_offsets;
+        ready.ok = (handle_kv_pull_req(transfer_message) == ErrorCode::SUCCESS);
+
+        cudaIpcMemHandle_t tmp_key_handle{};
+        cudaIpcMemHandle_t tmp_value_handle{};
+        if (cudaIpcGetMemHandle(&tmp_key_handle, tmpKeyCache) == cudaSuccess &&
+            cudaIpcGetMemHandle(&tmp_value_handle, tmpValueCache) == cudaSuccess) {
+            ready.set_key_cuda_ipc_handle(tmp_key_handle);
+            ready.set_value_cuda_ipc_handle(tmp_value_handle);
+        }
+
+        to_peer_transfer->send(ready);
+        ++handled_transfer;
+    }
+
+    return ErrorCode::SUCCESS;
+}
+
 ErrorCode Worker::receive(ForwardMessage& message) {
     Channel* input = engine_config.is_first_stage() ? from_scheduler : from_prev_worker;
     if (input == nullptr) {
@@ -1024,32 +1058,12 @@ ErrorCode Worker::receive(ForwardMessage& message) {
 
     // Prefiller must keep serving transfer requests even when no compute message arrives.
     // here we handle transfer message type KV_PULL_REQ
-    if (is_pd_prefiller_worker() && from_peer_transfer != nullptr && to_peer_transfer != nullptr) {
-        constexpr size_t kTransferDrainBudget = 8;
-        size_t handled_transfer = 0;
-        TransferMessage transfer_message;
-        while (handled_transfer < kTransferDrainBudget &&
-               from_peer_transfer->try_receive(transfer_message)) {
-            if (transfer_message.transfer_type != TransferType::KV_PULL_REQ) {
-                ++handled_transfer;
-                continue;
-            }
-
-            TransferMessage ready;
-            ready.transfer_type = TransferType::KV_READY;
-            ready.seq_ids = transfer_message.seq_ids;
-            ready.seq_block_offsets = transfer_message.seq_block_offsets;
-            ready.ok = (handle_kv_pull_req(transfer_message) == ErrorCode::SUCCESS);
-            cudaIpcMemHandle_t tmp_key_handle{};
-            cudaIpcMemHandle_t tmp_value_handle{};
-            if (cudaIpcGetMemHandle(&tmp_key_handle, tmpKeyCache) == cudaSuccess &&
-                cudaIpcGetMemHandle(&tmp_value_handle, tmpValueCache) == cudaSuccess) {
-                ready.set_key_cuda_ipc_handle(tmp_key_handle);
-                ready.set_value_cuda_ipc_handle(tmp_value_handle);
-            }
-            to_peer_transfer->send(ready);
-
-            ++handled_transfer;
+    if (is_pd_prefiller_worker() 
+    && from_peer_transfer != nullptr 
+    && to_peer_transfer != nullptr) {
+        ErrorCode pull_error = receive_pull_req();
+        if (pull_error != ErrorCode::SUCCESS) {
+            return pull_error;
         }
 
         if (input->try_receive(message)) {

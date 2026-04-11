@@ -84,9 +84,6 @@ class Worker: public Role {
 
         void run() override;
         void work();
-        ErrorCode receive(ForwardMessage& message);
-        ErrorCode send(const ForwardMessage& message);
-
         void set_channels();
 
     private:
@@ -110,6 +107,8 @@ class Worker: public Role {
 
         void cleanup_retained_events();
         void setdevice();
+        ErrorCode receive(ForwardMessage& message);
+        ErrorCode send(const ForwardMessage& message);
         ErrorCode allocate_blocks(ForwardMessage& message);
         ErrorCode handle_remote_forward(ForwardMessage& message, void** external_hidden_out);
         ErrorCode handle_local_forward(ForwardMessage& message);
@@ -124,6 +123,7 @@ class Worker: public Role {
         //by checking local state for decoder worker and sending transfer request to peer prefiller worker if needed.
         ErrorCode ensure_decode_kv_ready(const ForwardMessage& message);
         std::unordered_map<size_t, size_t> build_required_blocks_map(const Batch& batch, bool is_prefill, bool is_decode) const;
+        ErrorCode receive_pull_req();
         ErrorCode handle_kv_pull_req(const TransferMessage& message);
 
         void pull_required_kv_blocks_from_peer(const std::unordered_map<size_t, size_t>& seq_required_blocks);

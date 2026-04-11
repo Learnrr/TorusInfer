@@ -39,6 +39,7 @@ enum class RouteType : uint8_t {
     DECODE = 2,
     FINISHED = 3,
     FAILED = 4,
+    FREE_SEQ = 5,
 };
 
 struct ForwardMessage : public ChannelMessage {
@@ -295,10 +296,12 @@ struct ForwardMessage : public ChannelMessage {
 };
 
 struct RouteMessage : public ChannelMessage {
+    //sequence related information for building sequence in scheduler
     size_t seq_id;
-    RouteType route_type;
     SequenceConfig sequence_config;
     std::vector<size_t> token_ids;
+
+    RouteType route_type;
 
     std::vector<char> serialize() const override {
         const size_t total =

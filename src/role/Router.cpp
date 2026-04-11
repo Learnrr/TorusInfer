@@ -138,25 +138,36 @@ void Router::from_decoder_handler() {
         return;
     }
     size_t seq_id = msg.seq_id;
-    std::lock_guard<std::mutex> lock(queue_mutex);
-    auto it = decode_inflight.find(seq_id);
-    if (it != decode_inflight.end()) {
-        if (msg.route_type != RouteType::DECODE) {
-            LOG_ERROR("Router expected DECODE return from decoder for seq " + std::to_string(seq_id));
-            return;
-        }
-        it->second.route_type = RouteType::FINISHED;
-        route_states[seq_id] = RouteType::FINISHED;
-
-        auto seq_it = sequence_store.find(seq_id);
-        if (seq_it != sequence_store.end() && seq_it->second) {
-            if (!msg.token_ids.empty()) {
-                seq_it->second->token_ids = msg.token_ids;
-                seq_it->second->seq_len = msg.token_ids.size();
+    bool reached_finished = false;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        auto it = decode_inflight.find(seq_id);
+        if (it != decode_inflight.end()) {
+            if (msg.route_type != RouteType::DECODE) {
+                LOG_ERROR("Router expected DECODE return from decoder for seq " + std::to_string(seq_id));
+                return;
             }
+            it->second.route_type = RouteType::FINISHED;
+            route_states[seq_id] = RouteType::FINISHED;
+
+            auto seq_it = sequence_store.find(seq_id);
+            if (seq_it != sequence_store.end() && seq_it->second) {
+                if (!msg.token_ids.empty()) {
+                    seq_it->second->token_ids = msg.token_ids;
+                    seq_it->second->seq_len = msg.token_ids.size();
+                }
+            }
+            decode_inflight.erase(it);
+            route_cv.notify_all();
+            reached_finished = true;
         }
-        decode_inflight.erase(it);
-        route_cv.notify_all();
+    }
+
+    if (reached_finished) {
+        ErrorCode free_signal_error = send_free_seq_to_schedulers(seq_id);
+        if (free_signal_error != ErrorCode::SUCCESS) {
+            LOG_ERROR("Router failed to fan out FREE_SEQ for seq_id=" + std::to_string(seq_id));
+        }
     }
 }
 
@@ -206,6 +217,29 @@ ErrorCode Router::wait_until_finished(size_t seq_id) {
         auto it = route_states.find(seq_id);
         return it != route_states.end() && it->second == RouteType::FINISHED;
     });
+
+    return ErrorCode::SUCCESS;
+}
+
+ErrorCode Router::send_free_seq_to_schedulers(size_t seq_id) {
+    RouteMessage msg;
+    msg.seq_id = seq_id;
+    msg.route_type = RouteType::FREE_SEQ;
+
+    bool sent_any = false;
+    if (to_prefiller_channel != nullptr) {
+        to_prefiller_channel->send(msg);
+        sent_any = true;
+    }
+    if (to_decoder_channel != nullptr) {
+        to_decoder_channel->send(msg);
+        sent_any = true;
+    }
+
+    if (!sent_any) {
+        LOG_ERROR("Router failed to send FREE_SEQ because scheduler channels are unavailable.");
+        return ErrorCode::NO_MESSAGE;
+    }
 
     return ErrorCode::SUCCESS;
 }

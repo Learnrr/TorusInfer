@@ -49,6 +49,7 @@ class Scheduler: public Role {
         ErrorCode addSequence(size_t seq_id, std::vector<size_t> token_ids, const SequenceConfig& sequence_config = SequenceConfig());
 
         ErrorCode getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq);
+        ErrorCode wait_until_finished(size_t seq_id);
 
         ErrorCode getFinishedSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq);
 
@@ -99,6 +100,7 @@ class Scheduler: public Role {
         void submitDecodePath();
         void submitPrefillPath();
         void handleFinishedAndReport();
+        
 
         std::unordered_map<size_t, InflightEntry> decode_inflight_batches; // batch_id -> inflight entry
         std::unordered_map<size_t, InflightEntry> prefill_inflight_batches; // batch_id -> inflight entry
@@ -113,5 +115,6 @@ class Scheduler: public Role {
         Channel* from_router_channel = nullptr;
         void send_finished_prefill_to_router();
         void send_finished_decode_to_router();
+        void handleRouterFreeSeq(size_t seq_id);
         
 };

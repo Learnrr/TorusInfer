@@ -163,7 +163,7 @@ void Engine::run() {
     }
 }   
 
-//================= scheduler side functions==========================
+//================= router/scheduler side functions==========================
 void Engine::submit_tokens(std::vector<size_t> token_ids, const SequenceConfig& sequence_config, size_t& request_id){
     request_id = 0;
     create_request(token_ids, request_id);
@@ -272,9 +272,12 @@ void Engine::get_request_output(size_t request_id, SequenceOutput& output) {
             request_manager->set_request_status(request_id, RequestStatus::FAILED);
             return;
         }
-    } else {
-        std::unique_lock<std::mutex> lock(seq->mtx);
-        seq->cv.wait(lock, [&seq]{ return seq->state == SequenceState::FINISHED; });
+    } else if (!engine_config.enable_pd_disaggregation && engine_config.role == "scheduler") {
+        ErrorCode wait_error = scheduler->wait_until_finished(seq_id);
+        if (wait_error != ErrorCode::SUCCESS) {
+            request_manager->set_request_status(request_id, RequestStatus::FAILED);
+            return;
+        }
     }
 
     output.seq_id = seq->seq_id;

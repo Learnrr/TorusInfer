@@ -7,6 +7,7 @@
 #include "utils/timer.h"
 #include "model/ModelForwardContext.h"
 
+#include <algorithm>
 #include <unordered_set>
 
 Scheduler::Scheduler(
@@ -148,8 +149,13 @@ void Scheduler::phaseAReceiveRouterCommands() {
             if (!from_router_channel->try_receive(msg)) {
                 break;
             }
+            if (msg.route_type == RouteType::FREE_SEQ) {
+                handleRouterFreeSeq(msg.seq_id);
+                ++received;
+                continue;
+            }
             if (msg.route_type != RouteType::PREFILL) {
-                LOG_ERROR("Prefiller scheduler received non-prefill RouteMessage.");
+                LOG_ERROR("Prefiller scheduler received unsupported RouteMessage.");
                 continue;
             }
             addSequence(msg.seq_id, msg.token_ids, msg.sequence_config);
@@ -164,8 +170,13 @@ void Scheduler::phaseAReceiveRouterCommands() {
             if (!from_router_channel->try_receive(msg)) {
                 break;
             }
+            if (msg.route_type == RouteType::FREE_SEQ) {
+                handleRouterFreeSeq(msg.seq_id);
+                ++received;
+                continue;
+            }
             if (msg.route_type != RouteType::DECODE) {
-                LOG_ERROR("Decoder scheduler received non-decode RouteMessage.");
+                LOG_ERROR("Decoder scheduler received unsupported RouteMessage.");
                 continue;
             }
             auto seq = seq_pool->create(msg.seq_id, msg.sequence_config);
@@ -180,6 +191,50 @@ void Scheduler::phaseAReceiveRouterCommands() {
             ++received;
         }
         return;
+    }
+}
+
+void Scheduler::handleRouterFreeSeq(size_t seq_id) {
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex);
+
+        prepared_queue.erase(
+            std::remove(prepared_queue.begin(), prepared_queue.end(), seq_id),
+            prepared_queue.end()
+        );
+        waiting_queue.erase(
+            std::remove(waiting_queue.begin(), waiting_queue.end(), seq_id),
+            waiting_queue.end()
+        );
+        decoding_queue.erase(
+            std::remove(decoding_queue.begin(), decoding_queue.end(), seq_id),
+            decoding_queue.end()
+        );
+        prefilling_queue.erase(
+            std::remove(prefilling_queue.begin(), prefilling_queue.end(), seq_id),
+            prefilling_queue.end()
+        );
+        finished_queue.erase(
+            std::remove(finished_queue.begin(), finished_queue.end(), seq_id),
+            finished_queue.end()
+        );
+        prefill_report_pending_queue.erase(
+            std::remove(prefill_report_pending_queue.begin(), prefill_report_pending_queue.end(), seq_id),
+            prefill_report_pending_queue.end()
+        );
+        decode_report_pending_queue.erase(
+            std::remove(decode_report_pending_queue.begin(), decode_report_pending_queue.end(), seq_id),
+            decode_report_pending_queue.end()
+        );
+        sequences_in_decoding.erase(seq_id);
+        seq_pool->erase(seq_id);
+    }
+
+    Batch control_batch;
+    control_batch.sequence_ids = {seq_id};
+    ErrorCode free_error = coordinator->run_free(control_batch);
+    if (free_error != ErrorCode::SUCCESS) {
+        LOG_ERROR("Scheduler failed to execute FREE_SEQ for seq_id=" + std::to_string(seq_id));
     }
 }
 
@@ -761,6 +816,17 @@ ErrorCode Scheduler::getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& s
     if (!seq) {
         return ErrorCode::SEQUENCE_NOT_FOUND;
     }
+    return ErrorCode::SUCCESS;
+}
+
+ErrorCode Scheduler::wait_until_finished(size_t seq_id) {
+    std::shared_ptr<Sequence> seq = seq_pool->get(seq_id);
+    if (!seq) {
+        return ErrorCode::SEQUENCE_NOT_FOUND;
+    }
+
+    std::unique_lock<std::mutex> lock(seq->mtx);
+    seq->cv.wait(lock, [&seq]{ return seq->state == SequenceState::FINISHED; });
     return ErrorCode::SUCCESS;
 }
 
