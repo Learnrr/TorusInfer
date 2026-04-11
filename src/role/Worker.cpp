@@ -90,7 +90,11 @@ bool Worker::is_pd_decoder_worker() const {
         engine_config.pd_role == "decoder";
 }
 
-std::unordered_map<size_t, size_t> Worker::build_required_blocks_map(const Batch& batch, bool is_prefill, bool is_decode) const {
+std::unordered_map<size_t, size_t> Worker::build_required_blocks_map(
+    const Batch& batch, 
+    bool is_prefill, 
+    bool is_decode
+) const {
     std::unordered_map<size_t, size_t> seq_required_blocks;
     if (is_prefill) {
         for (size_t i = 0; i < batch.num_tokens; ++i) {
@@ -208,12 +212,6 @@ ErrorCode Worker::ensure_decode_kv_ready(const ForwardMessage& message) {
         LOG_ERROR("PD transfer KV_READY response seq_ids size mismatch with request.");
         return ErrorCode::UNKNOWN_ERROR;
     }
-    for (size_t i = 0; i < req.seq_ids.size(); ++i) {
-        if (response.seq_ids[i] != req.seq_ids[i]) {
-            LOG_ERROR("PD transfer KV_READY response seq_ids mismatch with request.");
-            return ErrorCode::UNKNOWN_ERROR;
-        }
-    }
     if (response.seq_block_offsets.size() != req.seq_block_offsets.size() ||
         response.seq_block_offsets.back() != running_block_offset) {
         LOG_ERROR("PD transfer KV_READY response offsets mismatch with request.");
@@ -228,13 +226,21 @@ ErrorCode Worker::ensure_decode_kv_ready(const ForwardMessage& message) {
     // open IPC handles and copy the KV data into local cache blocks
     void* remote_key_ptr = nullptr;
     void* remote_value_ptr = nullptr;
-    cudaError_t key_ipc_err = cudaIpcOpenMemHandle(&remote_key_ptr, key_kv_handle, cudaIpcMemLazyEnablePeerAccess);
+    cudaError_t key_ipc_err = cudaIpcOpenMemHandle(
+        &remote_key_ptr, 
+        key_kv_handle, 
+        cudaIpcMemLazyEnablePeerAccess
+    );
     if (key_ipc_err != cudaSuccess) {
         LOG_ERROR("Failed to open key IPC handle: " + std::string(cudaGetErrorString(key_ipc_err)));
         return ErrorCode::UNKNOWN_ERROR;
     }
 
-    cudaError_t value_ipc_err = cudaIpcOpenMemHandle(&remote_value_ptr, value_kv_handle, cudaIpcMemLazyEnablePeerAccess);
+    cudaError_t value_ipc_err = cudaIpcOpenMemHandle(
+        &remote_value_ptr, 
+        value_kv_handle, 
+        cudaIpcMemLazyEnablePeerAccess
+    );
     if (value_ipc_err != cudaSuccess) {
         LOG_ERROR("Failed to open value IPC handle: " + std::string(cudaGetErrorString(value_ipc_err)));
         cudaIpcCloseMemHandle(remote_key_ptr);
@@ -293,7 +299,8 @@ ErrorCode Worker::ensure_decode_kv_ready(const ForwardMessage& message) {
         cudaMemcpyDeviceToDevice
     );
     if (key_copy_err != cudaSuccess) {
-        LOG_ERROR("Failed to copy key KV from IPC handle: " + std::string(cudaGetErrorString(key_copy_err)));
+        LOG_ERROR("Failed to copy key KV from IPC handle: " + 
+            std::string(cudaGetErrorString(key_copy_err)));
         close_remote_kv_handles();
         return ErrorCode::UNKNOWN_ERROR;
     }
@@ -304,7 +311,8 @@ ErrorCode Worker::ensure_decode_kv_ready(const ForwardMessage& message) {
         cudaMemcpyDeviceToDevice
     );
     if (value_copy_err != cudaSuccess) {
-        LOG_ERROR("Failed to copy value KV from IPC handle: " + std::string(cudaGetErrorString(value_copy_err)));
+        LOG_ERROR("Failed to copy value KV from IPC handle: " + 
+            std::string(cudaGetErrorString(value_copy_err)));
         close_remote_kv_handles();
         return ErrorCode::UNKNOWN_ERROR;
     }
@@ -324,7 +332,8 @@ ErrorCode Worker::ensure_decode_kv_ready(const ForwardMessage& message) {
         while (seq->blocks.size() < blk_count) {
             auto result = cache_manager->allocate_cache_block();
             if (!std::holds_alternative<std::shared_ptr<CacheBlock>>(result)) {
-                LOG_ERROR("Failed to allocate KV block for sequence " + std::to_string(seq_id) + " while restoring transferred KV.");
+                LOG_ERROR("Failed to allocate KV block for sequence " + 
+                    std::to_string(seq_id) + " while restoring transferred KV.");
                 close_remote_kv_handles();
                 return ErrorCode::MEMORY_FAILURE;
             }
@@ -365,7 +374,8 @@ ErrorCode Worker::ensure_decode_kv_ready(const ForwardMessage& message) {
 
     cudaError_t sync_restore_err = cudaStreamSynchronize(0);
     if (sync_restore_err != cudaSuccess) {
-        LOG_ERROR("Failed to synchronize restored KV blocks: " + std::string(cudaGetErrorString(sync_restore_err)));
+        LOG_ERROR("Failed to synchronize restored KV blocks: " + 
+            std::string(cudaGetErrorString(sync_restore_err)));
         close_remote_kv_handles();
         return ErrorCode::CUDA_FAILURE;
     }
@@ -379,7 +389,8 @@ void Worker::setdevice() {
     cudaError_t set_device_err = cudaSetDevice(engine_config.local_device_id);
     if (set_device_err != cudaSuccess) {
         LOG_ERROR(
-            "worker failed to set CUDA device to " + std::to_string(engine_config.local_device_id) +
+            "worker failed to set CUDA device to " + 
+            std::to_string(engine_config.local_device_id) + 
             ": " + std::string(cudaGetErrorString(set_device_err))
         );
     } else {
@@ -520,7 +531,11 @@ ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external
 
     //open remote handle and calculate the address on remote for hidden states input
     cudaIpcMemHandle_t handle = message.cuda_ipc_handle();
-    cudaError_t err = cudaIpcOpenMemHandle(&remote_base_ptr, handle, cudaIpcMemLazyEnablePeerAccess);
+    cudaError_t err = cudaIpcOpenMemHandle(
+        &remote_base_ptr, 
+        handle, 
+        cudaIpcMemLazyEnablePeerAccess
+    );
     if (err != cudaSuccess) {
         LOG_ERROR("Worker failed to open CUDA IPC handle: " + std::string(cudaGetErrorString(err)));
         return ErrorCode::CUDA_FAILURE;
@@ -549,7 +564,8 @@ ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external
 
         cudaError_t wait_err = cudaStreamWaitEvent(0, incoming_ready_event, 0);
         if (wait_err != cudaSuccess) {
-            LOG_ERROR("Worker failed to wait on CUDA IPC event: " + std::string(cudaGetErrorString(wait_err)));
+            LOG_ERROR("Worker failed to wait on CUDA IPC event: " + 
+                std::string(cudaGetErrorString(wait_err)));
             cudaEventDestroy(incoming_ready_event);
             cudaIpcCloseMemHandle(remote_base_ptr);
             return ErrorCode::CUDA_FAILURE;
@@ -560,7 +576,8 @@ ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external
     int local_device = -1;
     cudaError_t get_dev_err = cudaGetDevice(&local_device);
     if (get_dev_err != cudaSuccess) {
-        LOG_ERROR("Worker failed to query current CUDA device: " + std::string(cudaGetErrorString(get_dev_err)));
+        LOG_ERROR("Worker failed to query current CUDA device: " + 
+            std::string(cudaGetErrorString(get_dev_err)));
         if (incoming_ready_event != nullptr) {
             cudaEventDestroy(incoming_ready_event);
         }
@@ -594,7 +611,8 @@ ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external
     // synchronize to make sure the copy is done before running the model forward
     cudaError_t copy_sync_err = cudaStreamSynchronize(0);
     if (copy_sync_err != cudaSuccess) {
-        LOG_ERROR("Worker failed to synchronize IPC hidden copy on stream 0: " + std::string(cudaGetErrorString(copy_sync_err)));
+        LOG_ERROR("Worker failed to synchronize IPC hidden copy on stream 0: " + 
+            std::string(cudaGetErrorString(copy_sync_err)));
         if (incoming_ready_event != nullptr) {
             cudaEventDestroy(incoming_ready_event);
         }
@@ -636,13 +654,15 @@ ErrorCode Worker::handle_remote_forward(ForwardMessage& message, void** external
     if (incoming_ready_event != nullptr) {
         cudaError_t destroy_event_err = cudaEventDestroy(incoming_ready_event);
         if (destroy_event_err != cudaSuccess) {
-            LOG_ERROR("Worker failed to destroy imported IPC event: " + std::string(cudaGetErrorString(destroy_event_err)));
+            LOG_ERROR("Worker failed to destroy imported IPC event: " + 
+                std::string(cudaGetErrorString(destroy_event_err)));
         }
     }
 
     cudaError_t close_err = cudaIpcCloseMemHandle(remote_base_ptr);
     if (close_err != cudaSuccess) {
-        LOG_ERROR("Worker failed to close CUDA IPC handle: " + std::string(cudaGetErrorString(close_err)));
+        LOG_ERROR("Worker failed to close CUDA IPC handle: " + 
+            std::string(cudaGetErrorString(close_err)));
         return ErrorCode::CUDA_FAILURE;
     }
 
@@ -688,7 +708,8 @@ ErrorCode Worker::build_response_and_send(
         cudaIpcMemHandle_t out_handle{};
         cudaError_t ipc_err = cudaIpcGetMemHandle(&out_handle, workspace_base_addr);
         if (ipc_err != cudaSuccess) {
-            LOG_ERROR("Worker failed to get CUDA IPC handle for workspace base address: " + std::string(cudaGetErrorString(ipc_err)));
+            LOG_ERROR("Worker failed to get CUDA IPC handle for workspace base address: " +
+                 std::string(cudaGetErrorString(ipc_err)));
             return ErrorCode::CUDA_FAILURE;
         }
         // need to create an IPC event to signal the next stage worker when the hidden states are ready
@@ -698,21 +719,24 @@ ErrorCode Worker::build_response_and_send(
             cudaEventDisableTiming | cudaEventInterprocess
         );
         if (create_err != cudaSuccess) {
-            LOG_ERROR("Worker failed to create IPC event for outgoing hidden states: " + std::string(cudaGetErrorString(create_err)));
+            LOG_ERROR("Worker failed to create IPC event for outgoing hidden states: " + 
+                std::string(cudaGetErrorString(create_err)));
             return ErrorCode::CUDA_FAILURE;
         }
 
         cudaIpcEventHandle_t outgoing_ready_event_handle{};
         cudaError_t export_err = cudaIpcGetEventHandle(&outgoing_ready_event_handle, outgoing_ready_event);
         if (export_err != cudaSuccess) {
-            LOG_ERROR("Worker failed to export IPC event handle: " + std::string(cudaGetErrorString(export_err)));
+            LOG_ERROR("Worker failed to export IPC event handle: " + 
+                std::string(cudaGetErrorString(export_err)));
             cudaEventDestroy(outgoing_ready_event);
             return ErrorCode::CUDA_FAILURE;
         }
 
         cudaError_t record_err = cudaEventRecord(outgoing_ready_event, 0);
         if (record_err != cudaSuccess) {
-            LOG_ERROR("Worker failed to record outgoing IPC event: " + std::string(cudaGetErrorString(record_err)));
+            LOG_ERROR("Worker failed to record outgoing IPC event: " + 
+                std::string(cudaGetErrorString(record_err)));
             cudaEventDestroy(outgoing_ready_event);
             return ErrorCode::CUDA_FAILURE;
         }
@@ -725,7 +749,8 @@ ErrorCode Worker::build_response_and_send(
 
         auto event = retained_outgoing_events.find(batch.batch_id);
         if (event != retained_outgoing_events.end()) {
-            LOG_ERROR("Worker already has a retained outgoing event for batch_id=" + std::to_string(batch.batch_id) + ", overwriting it with new event.");
+            LOG_ERROR("Worker already has a retained outgoing event for batch_id=" + 
+                std::to_string(batch.batch_id) + ", overwriting it with new event.");
             cudaEventDestroy(event->second);
         }
         retained_outgoing_events[batch.batch_id] = outgoing_ready_event;
@@ -758,7 +783,8 @@ void Worker::work() {
             if (stop_error != ErrorCode::SUCCESS) {
                 stop_response.op_type = ForwardOp::INVALID;
             } else {
-                stop_response.op_type = engine_config.is_last_stage() ? ForwardOp::DONE : ForwardOp::STOP;
+                stop_response.op_type = engine_config.is_last_stage() ? 
+                    ForwardOp::DONE : ForwardOp::STOP;
             }
             ErrorCode send_error = send(stop_response);
             if (send_error != ErrorCode::SUCCESS) {
@@ -831,7 +857,8 @@ void Worker::work() {
                 probe_response.batch.batch_id = message.batch.batch_id;
                 probe_response.batch.sequence_ids = message.batch.sequence_ids;
             } else {
-                probe_response.op_type = engine_config.is_last_stage() ? ForwardOp::PREFIX_PROBE_RESPONSE : ForwardOp::PREFIX_PROBE;
+                probe_response.op_type = engine_config.is_last_stage() ? 
+                    ForwardOp::PREFIX_PROBE_RESPONSE : ForwardOp::PREFIX_PROBE;
                 probe_response.batch = message.batch;
             }
             ErrorCode send_error = send(probe_response);
@@ -1010,17 +1037,18 @@ void Worker::cleanup_retained_events() {
         }
         cudaError_t destroy_err = cudaEventDestroy(event);
         if (destroy_err != cudaSuccess) {
-            LOG_ERROR("Worker failed to destroy retained event during cleanup: " + std::string(cudaGetErrorString(destroy_err)));
+            LOG_ERROR("Worker failed to destroy retained event during cleanup: " + 
+                std::string(cudaGetErrorString(destroy_err)));
         }
     }
     retained_outgoing_events.clear();
 }
-
+// in pd mode, prefiller worker need to serve pull request from decoder worker
 ErrorCode Worker::receive_pull_req() {
     constexpr size_t kTransferDrainBudget = 8;
     size_t handled_transfer = 0;
     TransferMessage transfer_message;
-
+    // here we use a budget to avoid starvation of compute messages 
     while (handled_transfer < kTransferDrainBudget &&
            from_peer_transfer->try_receive(transfer_message)) {
         if (transfer_message.transfer_type != TransferType::KV_PULL_REQ) {
@@ -1032,6 +1060,8 @@ ErrorCode Worker::receive_pull_req() {
         ready.transfer_type = TransferType::KV_READY;
         ready.seq_ids = transfer_message.seq_ids;
         ready.seq_block_offsets = transfer_message.seq_block_offsets;
+        //handle_kv_pull_req will make requested KV blocks a big tensor and 
+        //copy the it to this worker's tmp cache 
         ready.ok = (handle_kv_pull_req(transfer_message) == ErrorCode::SUCCESS);
 
         cudaIpcMemHandle_t tmp_key_handle{};
@@ -1087,11 +1117,10 @@ ErrorCode Worker::send(const ForwardMessage& message) {
     return ErrorCode::SUCCESS;
 }
 
-
+// Bind prefix cache blocks to sequences in the batch based on prefix hit metadata, 
+//and add block refs in cache manager.
 ErrorCode Worker::bind_cacheblocks_for_batch(const Batch& batch){
-    if (prefix_cache_manager == nullptr) {
-        return ErrorCode::SUCCESS;
-    }
+
     if (batch.prefix_hit_tokens_per_seq.size() != batch.batch_size ||
         batch.max_token_positions.size() != batch.batch_size) {
         LOG_ERROR("Worker received invalid prefix hit metadata for binding.");
@@ -1134,7 +1163,8 @@ ErrorCode Worker::bind_cacheblocks_for_batch(const Batch& batch){
         std::vector<size_t> block_ids;
         ErrorCode lookup_err = prefix_cache_manager->get_cache_block_ids(token_ids_for_seq, block_ids);
         if (lookup_err != ErrorCode::SUCCESS || block_ids.size() < hit_blocks) {
-            LOG_ERROR("Worker failed to lookup prefix cache block ids for sequence " + std::to_string(seq_id));
+            LOG_ERROR("Worker failed to lookup prefix cache block ids for sequence " + 
+                std::to_string(seq_id));
             return ErrorCode::UNKNOWN_ERROR;
         }
 
@@ -1142,13 +1172,15 @@ ErrorCode Worker::bind_cacheblocks_for_batch(const Batch& batch){
             const size_t block_id = block_ids[b];
             auto cache_block = cache_manager->get_cache_block(block_id);
             if (!std::holds_alternative<std::shared_ptr<CacheBlock>>(cache_block)) {
-                LOG_ERROR("Worker failed to get cache block " + std::to_string(block_id) + " for prefix cache binding.");
+                LOG_ERROR("Worker failed to get cache block " + std::to_string(block_id) + 
+                " for prefix cache binding.");
                 return ErrorCode::UNKNOWN_ERROR;
             }
 
             ErrorCode add_ref_err = cache_manager->add_block_ref(block_id);
             if (add_ref_err != ErrorCode::SUCCESS) {
-                LOG_ERROR("Worker failed to add cache block ref for block " + std::to_string(block_id));
+                LOG_ERROR("Worker failed to add cache block ref for block " + 
+                    std::to_string(block_id));
                 return add_ref_err;
             }
             seq->blocks.push_back(std::get<std::shared_ptr<CacheBlock>>(cache_block));
@@ -1159,7 +1191,8 @@ ErrorCode Worker::bind_cacheblocks_for_batch(const Batch& batch){
 
     return ErrorCode::SUCCESS;
 }
-
+// trim prefill batch by removing prefix tokens that hit in cache after binding, 
+//the remaining tokens in batch are all cache-miss and need to go through compute.
 ErrorCode Worker::trim_prefill_batch_after_prefix_bind(Batch& batch) {
     if (batch.batch_size == 0) {
         batch.token_ids.clear();
@@ -1286,7 +1319,9 @@ ErrorCode Worker::handle_kv_pull_req(const TransferMessage& message) {
 
         auto seq = seq_pool->get(seq_id);
         if (!seq) {
-            LOG_ERROR("Worker failed to find sequence " + std::to_string(seq_id) + " for handling KV pull request.");
+            LOG_ERROR("Worker failed to find sequence " + 
+                std::to_string(seq_id) + 
+                " for handling KV pull request.");
             return ErrorCode::UNKNOWN_ERROR;
         }
 
@@ -1301,7 +1336,8 @@ ErrorCode Worker::handle_kv_pull_req(const TransferMessage& message) {
             const size_t logical_idx = i + 1;
             if (logical_idx == 0 || logical_idx > seq->blocks.size()) {
                 LOG_ERROR(
-                    "Worker received invalid logical block index " + std::to_string(logical_idx) +
+                    "Worker received invalid logical block index " + 
+                    std::to_string(logical_idx) +
                     " for sequence " + std::to_string(seq_id)
                 );
                 return ErrorCode::INVALID_INPUT;
@@ -1310,7 +1346,8 @@ ErrorCode Worker::handle_kv_pull_req(const TransferMessage& message) {
             const auto& block = seq->blocks[logical_idx - 1];
             if (!block || block->key_cache_ptr == nullptr || block->value_cache_ptr == nullptr) {
                 LOG_ERROR(
-                    "Worker found invalid KV cache block pointer for sequence " + std::to_string(seq_id) +
+                    "Worker found invalid KV cache block pointer for sequence " + 
+                    std::to_string(seq_id) +
                     " logical block " + std::to_string(logical_idx)
                 );
                 return ErrorCode::UNKNOWN_ERROR;
@@ -1322,7 +1359,8 @@ ErrorCode Worker::handle_kv_pull_req(const TransferMessage& message) {
         const size_t packed_bytes = cache_block_key_ptrs.size() * bytes_per_block;
         if (packed_bytes > tmp_capacity_bytes) {
             LOG_ERROR(
-                "Worker tmp KV buffer overflow risk for sequence " + std::to_string(seq_id) +
+                "Worker tmp KV buffer overflow risk for sequence " + 
+                std::to_string(seq_id) +
                 ": packed_bytes=" + std::to_string(packed_bytes) +
                 ", capacity=" + std::to_string(tmp_capacity_bytes)
             );
@@ -1340,7 +1378,9 @@ ErrorCode Worker::handle_kv_pull_req(const TransferMessage& message) {
                 0
             );
             if (key_copy_err != cudaSuccess) {
-                LOG_ERROR("Worker failed to pack key cache block for sequence " + std::to_string(seq_id) + ": " + std::string(cudaGetErrorString(key_copy_err)));
+                LOG_ERROR("Worker failed to pack key cache block for sequence " + 
+                    std::to_string(seq_id) + ": " + 
+                    std::string(cudaGetErrorString(key_copy_err)));
                 return ErrorCode::CUDA_FAILURE;
             }
 
@@ -1352,14 +1392,18 @@ ErrorCode Worker::handle_kv_pull_req(const TransferMessage& message) {
                 0
             );
             if (value_copy_err != cudaSuccess) {
-                LOG_ERROR("Worker failed to pack value cache block for sequence " + std::to_string(seq_id) + ": " + std::string(cudaGetErrorString(value_copy_err)));
+                LOG_ERROR("Worker failed to pack value cache block for sequence " + 
+                    std::to_string(seq_id) + ": " + 
+                    std::string(cudaGetErrorString(value_copy_err)));
                 return ErrorCode::CUDA_FAILURE;
             }
         }
 
         cudaError_t sync_err = cudaStreamSynchronize(0);
         if (sync_err != cudaSuccess) {
-            LOG_ERROR("Worker failed to synchronize packed KV cache transfer buffer for sequence " + std::to_string(seq_id) + ": " + std::string(cudaGetErrorString(sync_err)));
+            LOG_ERROR("Worker failed to synchronize packed KV cache transfer buffer for sequence " + 
+                std::to_string(seq_id) + ": " + 
+                std::string(cudaGetErrorString(sync_err)));
             return ErrorCode::CUDA_FAILURE;
         }
     }

@@ -25,9 +25,11 @@ void Router::run() {
     route();
     LOG_INFO("Router stopped");
 }
-
+//TODO: now the router is designed for one sequence at a time,
+// we can extend to support multiple sequences in flight
 void Router::route() {
     while(!stop_requested.load()){
+        //get one coming sequence from prefill ready queue and push to prefiller
         size_t prefill_seq_id = 0;
         bool has_prefill = false;
         {
@@ -41,7 +43,7 @@ void Router::route() {
         if (has_prefill) {
             add_to_prefiller(prefill_seq_id);
         }
-
+        //get one coming sequence from decode ready queue and push to decoder
         size_t decode_seq_id = 0;
         bool has_decode = false;
         {
@@ -55,7 +57,7 @@ void Router::route() {
         if (has_decode) {
             add_to_decoder(decode_seq_id);
         }
-
+        //handle the return sequence from prefiller and decoder
         from_prefiller_handler();
 
         from_decoder_handler();
@@ -63,7 +65,7 @@ void Router::route() {
     }
 
 }
-
+//used by user to add new sequence to router
 ErrorCode Router::add_sequence(
     size_t seq_id,
     std::vector<size_t> token_ids,
@@ -137,6 +139,7 @@ void Router::from_decoder_handler() {
     if (!from_decoder_channel->try_receive(msg)) {
         return;
     }
+    //handle the return sequence from decoder and mark as finished
     size_t seq_id = msg.seq_id;
     bool reached_finished = false;
     {
@@ -157,12 +160,14 @@ void Router::from_decoder_handler() {
                     seq_it->second->seq_len = msg.token_ids.size();
                 }
             }
+            //notify the waiting thread if any
             decode_inflight.erase(it);
             route_cv.notify_all();
             reached_finished = true;
         }
     }
-
+    //after reaching finished state, send free signal to schedulers
+    // for resource cleanup, e.g. KV cache
     if (reached_finished) {
         ErrorCode free_signal_error = send_free_seq_to_schedulers(seq_id);
         if (free_signal_error != ErrorCode::SUCCESS) {
@@ -205,7 +210,7 @@ void Router::from_prefiller_handler() {
         decode_ready_queue.push_back(seq_id);
     }
 }
-
+//used by user to wait until the sequence is finished and get the final output
 ErrorCode Router::wait_until_finished(size_t seq_id) {
     std::unique_lock<std::mutex> lock(queue_mutex);
     auto exists = sequence_store.find(seq_id);
@@ -261,8 +266,10 @@ ErrorCode Router::removeFinishedSequenceById(size_t seq_id) {
     if (it == sequence_store.end()) {
         return ErrorCode::SEQUENCE_NOT_FOUND;
     }
+    if(route_states[seq_id] != RouteType::FINISHED) {
+        return ErrorCode::SEQUENCE_NOT_FOUND;
+    }
     sequence_store.erase(it);
-    prefill_inflight.erase(seq_id);
     decode_inflight.erase(seq_id);
     route_states.erase(seq_id);
     return ErrorCode::SUCCESS;

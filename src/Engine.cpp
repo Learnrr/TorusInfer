@@ -265,7 +265,7 @@ void Engine::get_request_output(size_t request_id, SequenceOutput& output) {
         request_manager->set_request_status(request_id, RequestStatus::FAILED);
         return;
     }
-
+    
     if (engine_config.enable_pd_disaggregation && engine_config.role == "router") {
         ErrorCode wait_error = router->wait_until_finished(seq_id);
         if (wait_error != ErrorCode::SUCCESS) {
@@ -283,6 +283,7 @@ void Engine::get_request_output(size_t request_id, SequenceOutput& output) {
     output.seq_id = seq->seq_id;
     output.token_ids = seq->token_ids;
 
+    //TODO: metrics are not supported inPD disaggregation now
     //calculate metrics for the sequence
     size_t latency = metric_calculator->calculateLatency(*seq);
     size_t itl = metric_calculator->calculateITL(*seq);

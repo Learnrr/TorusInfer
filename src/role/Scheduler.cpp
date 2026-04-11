@@ -78,7 +78,8 @@ bool Scheduler::hasPendingWorkLocked() const {
            !decode_inflight_batches.empty() ||
            !prefill_inflight_batches.empty();
 }
-
+// check if there is sequence that is ready for decoding
+//either state is prefilled or decoding but not in inflight decode batches
 bool Scheduler::hasRunnableDecodeWork() {
     std::lock_guard<std::mutex> lock(queue_mutex);
     for (size_t seq_id : decoding_queue) {
@@ -128,6 +129,7 @@ bool Scheduler::canRunPrefill() const {
     return engine_config.scheduler_mode == "prefiller";
 }
 
+//scheduler method to handle commands from router
 void Scheduler::phaseAReceiveRouterCommands() {
     if (!(engine_config.enable_pd_disaggregation && engine_config.role == "scheduler")) {
         return;
@@ -137,8 +139,9 @@ void Scheduler::phaseAReceiveRouterCommands() {
         return;
     }
 
-    // Stage A remains non-blocking via try_receive; poll once per loop to avoid
-    // starving router commands when local work stays busy.
+    // stage A remains non-blocking via try_receive; 
+    // can receive multiple messages per loop to improve 
+    //throughput of handling router commands
 
     constexpr size_t kMaxRouterMessagesPerLoop = 16;
 
@@ -193,7 +196,8 @@ void Scheduler::phaseAReceiveRouterCommands() {
         return;
     }
 }
-
+//handle the free sequence command from router
+// and send free command to coordinator for resource cleanup, e.g. KV cache
 void Scheduler::handleRouterFreeSeq(size_t seq_id) {
     {
         std::lock_guard<std::mutex> lock(queue_mutex);
@@ -234,10 +238,12 @@ void Scheduler::handleRouterFreeSeq(size_t seq_id) {
     control_batch.sequence_ids = {seq_id};
     ErrorCode free_error = coordinator->run_free(control_batch);
     if (free_error != ErrorCode::SUCCESS) {
-        LOG_ERROR("Scheduler failed to execute FREE_SEQ for seq_id=" + std::to_string(seq_id));
+        LOG_ERROR("Scheduler failed to execute FREE_SEQ for seq_id=" + 
+            std::to_string(seq_id));
     }
 }
-
+//scheduler method to handle completion records from coordinator
+// prefilling to prefilled, decoding to finished and append decoded tokens to sequence
 void Scheduler::drainCompletionRecords() {
     CompletionRecord record;
     while (coordinator->poll_completion(record)) {
@@ -259,7 +265,8 @@ void Scheduler::drainCompletionRecords() {
                 completed_batch = prefill_it->second.batch;
                 prefill_inflight_batches.erase(record.batch_id);
             } else {
-                LOG_ERROR("Received completion record for unknown batch id " + std::to_string(record.batch_id));
+                LOG_ERROR("Received completion record for unknown batch id " + 
+                    std::to_string(record.batch_id));
                 continue;
             }
 
@@ -288,12 +295,13 @@ void Scheduler::drainCompletionRecords() {
                 Batch failed_batch = prefill_it->second.batch;
                 recoverFromPrefillFailure(failed_batch);
             } else {
-                LOG_ERROR("Received failure completion record for unknown batch id " + std::to_string(record.batch_id));
+                LOG_ERROR("Received failure completion record for unknown batch id " 
+                    + std::to_string(record.batch_id));
             }
         }
     }
 }
-
+//submit decode batch, can submit multiple batches in one loop if there is vacancy 
 void Scheduler::submitDecodePath() {
     size_t decode_flight_vacancy = engine_config.max_decode_batch_flight - decode_inflight_batches.size();
     bool has_decode_work = hasRunnableDecodeWork();
@@ -334,6 +342,7 @@ void Scheduler::submitDecodePath() {
     }
 }
 
+//submit prefill batch, can submit multiple batches in one loop if there is vacancy 
 void Scheduler::submitPrefillPath() {
     size_t prefill_flight_vacancy = engine_config.max_prefill_batch_flight - prefill_inflight_batches.size();
     bool has_waiting_work = false;
@@ -350,6 +359,8 @@ void Scheduler::submitPrefillPath() {
         }
         Batch prefill_batch = std::get<Batch>(result);
 
+        // optional prefix cache probe before prefill forward
+        // this probe will check the prefix length on all prefill workers
         if (engine_config.enable_prefix_cache) {
             ErrorCode probe_error = coordinator->run_prefix_probe(prefill_batch);
             if (probe_error != ErrorCode::SUCCESS) {
@@ -361,9 +372,10 @@ void Scheduler::submitPrefillPath() {
                 recoverFromPrefillFailure(prefill_batch);
                 return;
             }
+            // apply the probe result to the batch, basically add the hit length info in batch
             applyPrefixProbeToPrefillBatch(prefill_batch);
         }
-
+        
         if (prefill_batch.batch_size > 0 && prefill_batch.num_tokens > 0) {
             ModelForwardContext prefill_context;
             ErrorCode err_code = coordinator->run_prefill(prefill_batch, prefill_context);
@@ -372,7 +384,8 @@ void Scheduler::submitPrefillPath() {
                 recoverFromPrefillFailure(prefill_batch);
                 return;
             }
-
+            //check if there is sequence fully hit the prefix
+            //
             if (engine_config.enable_prefix_cache) {
                 if (!prefill_batch.prefill_full_hit_sequence_ids.empty()) {
                     std::unordered_set<size_t> full_hit_unique(
@@ -423,7 +436,8 @@ void Scheduler::handleFinishedAndReport() {
         }
     }
 
-    // Prefiller does not own final output. Keep output/worker-free on non-PD or decoder.
+    // prefiller does not own final output. 
+    //Keep output/worker-free on non-PD or decoder.
     if (!pd_scheduler_mode || canRunDecode()) {
         returnSequenceOutput();
     }
@@ -455,8 +469,11 @@ void Scheduler::schedule() {
             phaseAReceiveRouterCommands();
         }
 
-        // move prepared sequences to waiting queue
-        launchSequence();
+        // move prepared sequences to waiting queue:
+        // in PD mode, only prefiller owns PREPARED->WAITING transition
+        if (!pd_scheduler_mode || canRunPrefill()) {
+            launchSequence();
+        }
 
         // Stage B: drain completion records and update sequence states
         drainCompletionRecords();
@@ -487,7 +504,7 @@ void Scheduler::stopWorkers() {
         LOG_ERROR("Scheduler failed to send STOP to workers.");
     }
 }
-
+//if prefill failed, move the affected sequences back to waiting queue for retry in next scheduling loop
 void Scheduler::recoverFromPrefillFailure(const Batch& prefill_batch) {
     std::lock_guard<std::mutex> lock(queue_mutex);
     prefill_inflight_batches.erase(prefill_batch.batch_id);
@@ -518,6 +535,7 @@ void Scheduler::recoverFromPrefillFailure(const Batch& prefill_batch) {
     }
 }
 
+//if decode failed, move the affected sequences back to decoding queue for retry in next scheduling loop
 void Scheduler::recoverFromDecodeFailure(const Batch& decode_batch) {
     std::lock_guard<std::mutex> lock(queue_mutex);
     decode_inflight_batches.erase(decode_batch.batch_id);
@@ -598,7 +616,8 @@ ErrorCode Scheduler::movePrefilledToDecoding(const Batch& prefill_batch) {
     }
     return ErrorCode::SUCCESS;
 }
-
+//for token level batch building, we iterate the decoding queue and 
+//prefilling queue to find sequences that are not in inflight decode batches
 std::variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
     std::lock_guard<std::mutex> lock(queue_mutex);
     Batch batch;
@@ -652,7 +671,8 @@ std::variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
 
         seq->state = SequenceState::DECODING;
         decoding_queue.push_back(seq_id);
-        LOG_DEBUG("Sequence " + std::to_string(seq->seq_id) + " moved from PREFILLED to DECODING state.");
+        LOG_DEBUG("Sequence " + std::to_string(seq->seq_id) + 
+            " moved from PREFILLED to DECODING state.");
         it = prefilling_queue.erase(it);
 
         if (seq->token_ids.empty()) {
@@ -668,7 +688,9 @@ std::variant<Batch, ErrorCode> Scheduler::buildDecodeBatch() {
     }
 
     if (batch.batch_size > 0) {
-        LOG_DEBUG("BUILD DECODE BATCH: batch_size=" + std::to_string(batch.batch_size) + ", num_tokens=" + std::to_string(batch.num_tokens));
+        LOG_DEBUG("BUILD DECODE BATCH: batch_size=" + 
+            std::to_string(batch.batch_size) + 
+            ", num_tokens=" + std::to_string(batch.num_tokens));
     }
     return batch;
 }

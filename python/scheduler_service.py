@@ -15,7 +15,7 @@ from python.adaptor import(
 from python.engine import Engine
 
 app = FastAPI()
-config_path = "/llm_infer_engine/llm_engine_config_scheduler.json"
+config_path = "/TorusInfer/llm_engine_config_scheduler.json"
 engine = Engine(config_path)
 
 @app.post("/v1/chat/completions")

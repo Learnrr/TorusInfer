@@ -55,7 +55,7 @@ class Worker: public Role {
                 this->cache_manager = cache_manager;
                 this->workspace = workspace;
 
-                // Allocate tmp buffer for one decode batch worth of KV payload:
+                // allocate tmp buffer for one decode batch worth of KV payload:
                 // all seqs in batch * max sequence length (rounded to blocks).
                 const size_t max_decode_batch =
                     engine_config.max_decode_batch_size > 0 ? engine_config.max_decode_batch_size : 1;

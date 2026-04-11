@@ -24,33 +24,39 @@ class Router: public Role {
         void route();
         void set_channels();
         
-        ErrorCode add_sequence(size_t seq_id, std::vector<size_t> token_ids, const SequenceConfig& sequence_config = SequenceConfig());
+        ErrorCode add_sequence(
+            size_t seq_id, 
+            std::vector<size_t> token_ids, 
+            const SequenceConfig& sequence_config = SequenceConfig()
+        );
+        ErrorCode getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq);
+        ErrorCode removeFinishedSequenceById(size_t seq_id);
+        ErrorCode wait_until_finished(size_t seq_id);
 
-        //route the request to different channels based on the route type
+    private:
+        //functions extracted for better readability
         void add_to_prefiller(size_t seq_id);
         void add_to_decoder(size_t seq_id);
         void from_prefiller_handler();
         void from_decoder_handler();
-        ErrorCode wait_until_finished(size_t seq_id);
         ErrorCode send_free_seq_to_schedulers(size_t seq_id);
 
-        ErrorCode getSequenceById(size_t seq_id, std::shared_ptr<Sequence>& seq);
-        ErrorCode removeFinishedSequenceById(size_t seq_id);
-
-    private:
         LLMEngineConfig engine_config;
+
+        //queues and state tracking for routing logic
         std::deque<size_t> prefill_ready_queue;
         std::deque<size_t> decode_ready_queue;
         std::unordered_map<size_t, RouteMeta> prefill_inflight;
         std::unordered_map<size_t, RouteMeta> decode_inflight;
         std::unordered_map<size_t, RouteType> route_states;
-
         std::unordered_map<size_t, std::shared_ptr<Sequence>> sequence_store;
+        // protect the route states, queues and sequence store
         std::mutex queue_mutex;
         std::condition_variable route_cv;
 
         std::atomic<bool> stop_requested{false};
 
+        //communication channels with schedulers
         Channel* to_prefiller_channel = nullptr;
         Channel* to_decoder_channel = nullptr;
         Channel* from_prefiller_channel = nullptr;

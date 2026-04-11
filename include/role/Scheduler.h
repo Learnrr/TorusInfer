@@ -69,7 +69,7 @@ class Scheduler: public Role {
         std::vector<size_t> decode_report_pending_queue;
 
         std::unique_ptr<SequencePool> seq_pool;
-
+        // protect the route states, queues and sequence store
         std::mutex queue_mutex;
         std::condition_variable queue_cv;
 
@@ -79,15 +79,14 @@ class Scheduler: public Role {
         std::atomic<bool> stop_requested{false};
         std::atomic<uint64_t> next_batch_id{1};
 
+        //function logic extracted for better readability
         ErrorCode movePrefilledToDecoding(const Batch& prefill_batch);
         ErrorCode moveDecodingToFinished(const Batch& decode_batch);
         std::variant<Batch, ErrorCode> buildDecodeBatch();
-        std::variant<Batch, ErrorCode> buildPrefillBatch();
-        ErrorCode launchSequence();
+        std::variant<Batch, ErrorCode> buildPrefillBatch(); 
         ErrorCode handleFinishedSequence();
         void appendDecodedTokens(Batch& decode_batch);
         void freeFinishedSequencesOnWorkers(const std::vector<size_t>& sequence_ids);
-        void stopWorkers();
         void recoverFromPrefillFailure(const Batch& prefill_batch);
         void recoverFromDecodeFailure(const Batch& decode_batch);
         bool hasPendingWorkLocked() const;
@@ -95,11 +94,15 @@ class Scheduler: public Role {
         void applyPrefixProbeToPrefillBatch(Batch& prefill_batch);
         bool canRunDecode() const;
         bool canRunPrefill() const;
+        
+        // main schedule logic
+        ErrorCode launchSequence();
         void phaseAReceiveRouterCommands();
         void drainCompletionRecords();
         void submitDecodePath();
         void submitPrefillPath();
         void handleFinishedAndReport();
+        void stopWorkers();
         
 
         std::unordered_map<size_t, InflightEntry> decode_inflight_batches; // batch_id -> inflight entry
