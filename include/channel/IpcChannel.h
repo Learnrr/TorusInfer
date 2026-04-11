@@ -12,6 +12,7 @@ class IpcChannel : public Channel {
 
         void send(const ChannelMessage& message) override;
         void receive(ChannelMessage& message) override;
+        bool try_receive(ChannelMessage& message) override;
     private:
         bool ensure_open();
         bool write_all(const void* buf, size_t len);
@@ -19,5 +20,6 @@ class IpcChannel : public Channel {
 
         std::string name;
         int read_fd;
-        int write_fd;  
+        int write_fd;
+        std::vector<char> recv_buffer;
 };

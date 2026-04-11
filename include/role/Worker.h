@@ -54,6 +54,31 @@ class Worker: public Role {
                 }
                 this->cache_manager = cache_manager;
                 this->workspace = workspace;
+
+                // Allocate tmp buffer for one decode batch worth of KV payload:
+                // all seqs in batch * max sequence length (rounded to blocks).
+                const size_t max_decode_batch =
+                    engine_config.max_decode_batch_size > 0 ? engine_config.max_decode_batch_size : 1;
+                const size_t max_blocks_per_seq =
+                    (engine_config.max_sequence_length + engine_config.block_size - 1) /
+                    engine_config.block_size;
+                const size_t tmp_kv_capacity_bytes =
+                    max_decode_batch *
+                    max_blocks_per_seq *
+                    engine_config.block_size *
+                    engine_config.model_config.num_hidden_layers *
+                    engine_config.model_config.head_dim *
+                    engine_config.model_config.num_kv_heads *
+                    DataTypeBytes(engine_config.model_config.data_type);
+                cudaMalloc(
+                    &tmpKeyCache,
+                    tmp_kv_capacity_bytes
+                );
+                cudaMalloc(
+                    &tmpValueCache,
+                    tmp_kv_capacity_bytes
+                );
+
             } 
 
 
@@ -77,6 +102,8 @@ class Worker: public Role {
         Channel* to_scheduler = nullptr;
         Channel* from_prev_worker = nullptr;
         Channel* to_next_worker = nullptr;
+        Channel* from_peer_transfer = nullptr;
+        Channel* to_peer_transfer = nullptr;
 
         std::unordered_map<size_t, cudaEvent_t> retained_outgoing_events;
         std::atomic<bool> stop_requested{false};
@@ -89,5 +116,18 @@ class Worker: public Role {
         ErrorCode build_response_and_send(ForwardMessage& message, void* external_hidden_out, size_t produced_hidden_tokens);
         ErrorCode bind_cacheblocks_for_batch(const Batch& batch);
         ErrorCode trim_prefill_batch_after_prefix_bind(Batch& batch);
+        
+        bool is_pd_prefiller_worker() const;
+        bool is_pd_decoder_worker() const;
 
+        // Ensure required KV blocks for decode are ready before running decode forward, 
+        //by checking local state for decoder worker and sending transfer request to peer prefiller worker if needed.
+        ErrorCode ensure_decode_kv_ready(const ForwardMessage& message);
+        std::unordered_map<size_t, size_t> build_required_blocks_map(const Batch& batch, bool is_prefill, bool is_decode) const;
+        ErrorCode handle_kv_pull_req(const TransferMessage& message);
+
+        void pull_required_kv_blocks_from_peer(const std::unordered_map<size_t, size_t>& seq_required_blocks);
+        
+        void* tmpKeyCache = nullptr;
+        void* tmpValueCache = nullptr;
 };

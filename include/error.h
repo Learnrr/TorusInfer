@@ -12,4 +12,5 @@ enum class ErrorCode {
     FAILED_TO_OPEN_CONFIG_FILE = 9,
     REQUEST_NOT_FOUND = 10,
     INITIANLIZATION_ERROR = 11,
+    NO_MESSAGE = 12,
 };
